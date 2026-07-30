@@ -1,10 +1,14 @@
 # validate_join.py
 from nyu_provider import NYUProvider
-from courant import CourantInstructors
+from ma_instructors import MAInstructors
+from cs_instructors import CSInstructors
+from combined_instructors import CombinedInstructors
 from models import SectionKind
 
-provider = NYUProvider(instructors=CourantInstructors())
-courses = provider.get_courses("1268", ["MATH-UA 121", "MATH-UA 122", "CSCI-UA 102"])
+provider = NYUProvider(instructors=CombinedInstructors(MAInstructors(), CSInstructors()))
+courses = provider.get_courses(
+    "1268", ["MATH-UA 121", "MATH-UA 122", "CSCI-UA 101", "CSCI-UA 102"]
+)
 
 for course in courses:
     lectures = [s for s in course.sections if s.kind == SectionKind.LECTURE]

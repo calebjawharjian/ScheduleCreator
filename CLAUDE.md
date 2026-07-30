@@ -37,9 +37,13 @@ This project is a learning exercise as much as a deliverable. When helping:
   `--break-system-packages`; fix the venv instead. A broken venv gets rebuilt:
   `rm -rf venv && python3 -m venv venv && source venv/bin/activate`.
 - Dependencies: `requests`, `beautifulsoup4`, `anthropic`.
-- `ANTHROPIC_API_KEY` is set via `export` and is **session-only**, so a fresh
-  terminal silently falls back to the deterministic narrator. Moving to a
-  `.env` + python-dotenv (gitignored) is a pending cleanup.
+- `ANTHROPIC_API_KEY` is exported for the planned LLM narrator (see Known
+  gaps — not built yet) and is **session-only**, so a fresh terminal loses
+  it. Moving to a `.env` + python-dotenv (gitignored) is a pending cleanup
+  regardless of narrator status.
+- **Commit and push after each session and each significant code change,**
+  with a commit message describing what changed. Remote is
+  `github.com/calebjawharjian/ScheduleCreator`, branch `main`.
 
 ---
 
@@ -54,13 +58,14 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `providers.py` | Abstract `CourseProvider` interface + `FixtureProvider` |
 | `fixtures.py` | Hand-built offline course data for development and testing |
 | `nyu_provider.py` | Live NYU class-search provider, plus instructor enrichment |
-| `courant.py` | Courant (Math dept) instructor-name source |
+| `ma_instructors.py` | Math dept (Courant) instructor-name source |
+| `cs_instructors.py` | CS dept instructor-name source |
+| `combined_instructors.py` | Merges multiple instructor sources into one for `NYUProvider` |
 | `scheduler.py` | `valid_bundles`, `has_conflict`, `generate_schedules` |
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules` |
-| `narrator.py` | LLM explanation layer with deterministic fallback |
-| `main.py` | Scratch runner / CLI entry point |
+| `main.py` | CLI entry point: argparse flags for course codes, term, and preferences |
 | `validate_linkage.py` | **Keep.** Guards the recitation-linkage assumption |
-| `validate_join.py` | **Keep.** Guards the Courant instructor join |
+| `validate_join.py` | **Keep.** Guards both instructor-source joins (Math + CS) |
 
 ### Design principles established
 
@@ -157,7 +162,7 @@ Caveat to keep in mind: most recitations meet Friday while lectures do not, so a
 mislink between two Friday-free lectures could still escape detection. Run
 `validate_linkage.py` whenever a new department is added.
 
-### Courant instructor source (Math only)
+### Math department instructor source (Courant)
 
 ```
 GET https://math.nyu.edu/dynamic/courses/course-schedules/?semester=fall-2026
@@ -181,6 +186,33 @@ GET https://math.nyu.edu/dynamic/courses/course-schedules/?semester=fall-2026
   useful as a one-time cross-check that the join lined up.
 - The join is **exact** on `(course_code, section_no)`. No fuzzy name matching
   required here. Verified 7 of 7 for MATH-UA 121 Fall 2026.
+
+### CS department instructor source
+
+```
+GET https://cs.nyu.edu/dynamic/courses/schedule/?semester=fall_2026
+```
+
+- **Not a `<table>`** — it's a list of `<li class="row" id="csci-ua0101-001">`
+  elements, one per section. Scraped by selecting `li.row` directly, not by
+  finding a table and its rows.
+- Semester slug uses an **underscore** (`fall_2026`), unlike Courant's dashed
+  `fall-2026`. Easy to get wrong copy-pasting the other module's format.
+- Catalog format matches Courant's shape (`CSCI-UA.0101-001`), but the anchor
+  text embeds a **literal zero-width space** (`&#8203;`) right before the
+  section number. It's invisible but not whitespace to regex `\s`, so it has
+  to be stripped explicitly (`.replace("​", "")`) or the section number
+  parses as `"​001"` and the join silently fails.
+- The professor field uses placeholder text instead of a name: `TBA`,
+  `STAFF`, and `CANCELLED` (this last one not present on the Courant page,
+  since Courant only lists primary lectures which are cancelled less often).
+  All three are filtered out rather than joined in as if they were instructors.
+- No co-taught/multi-instructor sections found in this snapshot, so — like
+  Courant — one name per section is enough.
+- The join is **exact** on `(course_code, section_no)`, same shape as the Math
+  source. Verified 24 of 25 lectures matched across MATH-UA 121, MATH-UA 122,
+  CSCI-UA 101, and CSCI-UA 102 (Fall 2026); the one miss (CSCI-UA 102 sec 010)
+  is a genuine `TBA` on the department page, not a join failure.
 
 ### Rejected / dead ends
 
@@ -207,19 +239,31 @@ conflicts are detected, schedules are scored and ranked, and the top few are
 explained.
 
 For `["CSCI-UA 101", "CSCI-UA 102", "MATH-UA 121"]` in Fall 2026 this produces 1327
-conflict-free schedules, with Math lecture instructors populated.
+conflict-free schedules, with both Math and CS lecture instructors populated.
+Course codes, term, preferred days, time window, and factor weights are all
+CLI flags on `main.py` now (`--course`, `--term`, `--days`, `--time-start`/
+`--time-end`, `--weight`); only `professor_ratings` is still hardcoded empty.
 
 ### Known gaps
 
-- **Professor quality is inert.** Instructor names now exist for Math, but
-  `professor_ratings` is empty, so `_score_professor` returns a neutral 0.5 for every
-  schedule. A factor that is constant across all candidates contributes zero
-  discrimination to the ranking; it only shifts every total equally. Either wire up
-  RateMyProfessor or set its weight to 0 in the meantime.
-- **No CS instructor source.** The Courant page is the Math department's. The CS
-  department's equivalent page has not been located yet.
-- **Heavy score ties.** With only days and time discriminating, the top schedules all
-  tie at 0.71 and the ordering among them is arbitrary.
+- **Professor quality is inert.** Instructor names exist for both Math and CS,
+  but `professor_ratings` is empty, so `_score_professor` returns a neutral 0.5
+  for every schedule. A factor that is constant across all candidates
+  contributes zero discrimination to the ranking; it only shifts every total
+  equally. Either wire up RateMyProfessor or set its weight to 0 in the
+  meantime.
+- **No narrator.py / no LLM narration exists.** The architecture and design
+  principles above describe an "LLM explanation layer with deterministic
+  fallback," and the first commit's message claims "AI narration," but no such
+  file has ever existed (confirmed via `git ls-tree` on the initial commit).
+  `anthropic` is installed and `ANTHROPIC_API_KEY` handling is documented, but
+  nothing calls it. All current output (`main.py`'s "strongest"/"biggest
+  tradeoff" lines) is deterministic string formatting.
+- **Score ties are much rarer but not gone.** With six scoring factors instead
+  of three, the top-10 spread for the example course list is 0.67–0.74 rather
+  than a flat tie at 0.71. The exact ties that remain are schedules differing
+  only in which recitation slot they picked, where those slots happen to have
+  identical day/time — a correct result, not a bug.
 - **No tests.** Only the two validation scripts.
 - **Sections with no meeting times** (online/TBA) cannot conflict with anything and
   contribute nothing to day/time factors, which can inflate their schedules' scores.
@@ -234,28 +278,31 @@ conflict-free schedules, with Math lecture instructors populated.
 
 ## Next steps
 
-1. **New scoring factors** that discriminate and need no missing data: number of days
-   on campus, idle gaps between classes, earliest start time. Probably the highest
-   value-per-effort work available.
-2. **RateMyProfessor integration.** No official API; maintained unofficial wrappers
+1. **RateMyProfessor integration.** No official API; maintained unofficial wrappers
    exist around its GraphQL endpoint. Keep it behind its own `RatingProvider`-style
    interface so the legal/ToS question stays a swappable decision. Shrink or flag
    low-review-count ratings so a single 5-star review doesn't outrank a 4.3 with 100
    reviews. **This is where the genuinely fuzzy entity matching lives** (catalog name
-   to RMP profile), unlike the exact Courant join.
-3. **Locate a CS department instructor schedule** to fill the CSCI-UA gap.
-4. **Tests**, converting the two validation scripts into real ones.
-5. **FastAPI route layer** over the existing logic.
-6. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
+   to RMP profile), unlike the exact Math/CS joins.
+2. **Tests**, converting the two validation scripts into real ones.
+3. **Build `narrator.py`**, the LLM explanation layer described above — it doesn't
+   exist yet (see Known gaps). This has to land before lazy/cached narration (next
+   item) makes sense, since that step presupposes narration already exists.
+4. **FastAPI route layer** over the existing logic.
+5. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
    bars, expandable AI explanation.
-7. Lazy + cached narration (generate on expand, remember the result) rather than
+6. Lazy + cached narration (generate on expand, remember the result) rather than
    narrating the whole ranked list.
-8. Deploy, with a README containing an architecture diagram and a demo GIF.
+7. Deploy, with a README containing an architecture diagram and a demo GIF.
+
+Done since the last pass: new scoring factors (days on campus, idle time, late
+start), the CS department instructor source, and CLI input on `main.py`.
 
 ## Resume framing
 
 The strongest points to articulate: the provider abstraction (adding a university is
-one adapter), the deterministic-core-plus-LLM-narrator split (knowing where an LLM
-helps and where it doesn't), and the linked-recitation bundling, which was inferred
-from section numbering and then validated against meeting-time consistency and an
-independent department listing.
+one adapter), and the linked-recitation bundling, which was inferred from section
+numbering and then validated against meeting-time consistency and an independent
+department listing. The deterministic-core-plus-LLM-narrator split is the design
+principle that will govern `narrator.py` once it's built (see Next steps) — worth
+articulating as an intentional design decision, but don't claim it as shipped.

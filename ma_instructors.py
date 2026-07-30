@@ -23,9 +23,13 @@ def _value(cell_text: str) -> str:
     return cell_text.split(":", 1)[1].strip() if ":" in cell_text else cell_text
 
 
-class CourantInstructors:
-    """Instructor names keyed by (course_code, section_no).
+class MAInstructors:
+    """Instructor names keyed by (course_code, section_no), scraped from the
+    Courant (Math department) course-schedule page.
 
+    Same (course_code, section_no) -> name shape as CSInstructors, so
+    NYUProvider's enrichment pass doesn't need to know which department a
+    name came from; the two sources are interchangeable inputs to it.
     Courant publishes only primary lecture sections, which is exactly what
     the professor factor scores.
     """
@@ -39,7 +43,7 @@ class CourantInstructors:
 
         slug = TERM_SLUGS.get(term)
         if slug is None:
-            print(f"warning: no Courant semester slug for term {term!r}")
+            print(f"warning: no Math department semester slug for term {term!r}")
             self._cache[term] = {}
             return {}
 
