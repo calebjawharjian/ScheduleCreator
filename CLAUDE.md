@@ -537,7 +537,7 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   interchangeable, which `distinct_schedules` now collapses on display. Ties
   that survive collapsing are different weeks scoring equally, which is a
   correct result, not a bug.
-- **Coverage is behavioral, not exhaustive.** 201 offline tests plus 9 live ones
+- **Coverage is behavioral, not exhaustive.** 201 offline tests plus 10 live ones
   cover the scoring factors, duplicate collapsing, both linkage strategies,
   bundling, campus tagging, constraints, and both scrapers. `main.py` itself is
   untested (argparse wiring, prompts, display formatting), and there is no

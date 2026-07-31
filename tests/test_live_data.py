@@ -117,13 +117,41 @@ def test_live_rmp_schema_still_returns_the_fields_we_read():
 
 
 def test_live_known_professor_still_matches_and_scores():
-    from ratings import RMPRatings
+    from campuses import WASHINGTON_SQUARE
+    from ratings import RMPRatings, InstructorHint
 
     provider = RMPRatings(delay=0, cache_path=None, verbose=False)
-    ratings = provider.ratings_for({"Evan Korth": "Computer Science"})
+    ratings = provider.ratings_for({
+        "Evan Korth": InstructorHint("Computer Science", WASHINGTON_SQUARE)})
 
     assert "Evan Korth" in ratings
     assert 0.0 <= ratings["Evan Korth"] <= 5.0
+
+
+def test_live_tandon_is_a_separate_directory_with_its_own_faculty():
+    """The pinned Tandon schoolID is the whole basis for finding Brooklyn
+    professors. If RMP merges the schools or reissues the id, every MA-UY and
+    CS-UY instructor silently goes unrated again -- worth failing loudly.
+
+    Adam Constantine is the recorded case: absent from the main NYU directory,
+    present in Tandon.
+    """
+    from campuses import BROOKLYN
+    from ratings import (RMPRatings, InstructorHint, NYU_SCHOOL_ID,
+                         TANDON_SCHOOL_ID, _norm)
+
+    provider = RMPRatings(delay=0, cache_path=None, verbose=False)
+
+    main = provider._search("Constantine", NYU_SCHOOL_ID)
+    tandon = provider._search("Constantine", TANDON_SCHOOL_ID)
+    assert not any(_norm(t["firstName"]) == "adam" for t in main), \
+        "Constantine appearing in the main directory means the split has changed"
+    assert any(_norm(t["firstName"]) == "adam" for t in tandon), \
+        "Adam Constantine missing from Tandon: schoolID may have been reissued"
+
+    ratings = provider.ratings_for({
+        "Adam Constantine": InstructorHint("Mathematics", BROOKLYN)})
+    assert "Adam Constantine" in ratings
 
 
 def test_live_api_still_omits_instructors():
