@@ -1,3 +1,4 @@
+import { capitalize } from "../format";
 import type { Alternative } from "../types";
 
 interface Props {
@@ -28,7 +29,7 @@ export function AlternativeList({ alternatives, selected, onSelect }: Props) {
             >
               <span className="alt-head">
                 <span className={reserved ? "alt-reason reserved" : "alt-reason"}>
-                  {alternative.reason}
+                  {capitalize(alternative.reason)}
                 </span>
                 <span className="alt-score">{alternative.score.toFixed(2)}</span>
               </span>
@@ -45,7 +46,7 @@ export function AlternativeList({ alternatives, selected, onSelect }: Props) {
               <span className="bars">
                 {alternative.factors.map((factor) => (
                   <span key={factor.name} className="bar" title={
-                    `${factor.label}: ${(factor.score * 100).toFixed(0)}%`}>
+                    `${capitalize(factor.label)}: ${(factor.score * 100).toFixed(0)}%`}>
                     <span className="bar-fill"
                           style={{ height: `${Math.max(factor.score * 100, 2)}%` }} />
                   </span>

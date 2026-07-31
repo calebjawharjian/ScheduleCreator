@@ -1,4 +1,5 @@
 import type { Course, FactorMeta } from "../types";
+import { WeightRanking } from "./WeightRanking";
 
 const DAYS = ["MON", "TUE", "WED", "THU", "FRI"];
 
@@ -9,19 +10,19 @@ interface Props {
   preferredDays: string[];
   timeStart: string;
   timeEnd: string;
-  weights: Record<string, number>;
+  tiers: string[][];
   required: Record<string, string>;
   commuteMinutes: number;
   onDaysChange: (days: string[]) => void;
   onTimeChange: (start: string, end: string) => void;
-  onWeightChange: (name: string, value: number) => void;
+  onTiersChange: (tiers: string[][]) => void;
   onRequiredChange: (required: Record<string, string>) => void;
   onCommuteChange: (minutes: number) => void;
 }
 
 export function Controls(props: Props) {
   const {
-    factors, courses, campuses, preferredDays, timeStart, timeEnd, weights,
+    factors, courses, campuses, preferredDays, timeStart, timeEnd, tiers,
     required, commuteMinutes,
   } = props;
 
@@ -69,21 +70,10 @@ export function Controls(props: Props) {
       <section>
         <h3>What matters to you</h3>
         <p className="hint">
-          Relative, not percentages. Higher just means it outweighs the others.
+          Drag a factor to rank it. Drop one onto another to tie them at the
+          same priority.
         </p>
-        {factors.map((factor) => (
-          <label key={factor.name} className="slider">
-            <span className="slider-label">
-              {factor.label}
-              <em>{weights[factor.name] ?? factor.default}</em>
-            </span>
-            <input
-              type="range" min={0} max={10} step={1}
-              value={weights[factor.name] ?? factor.default}
-              onChange={(e) => props.onWeightChange(factor.name, Number(e.target.value))}
-            />
-          </label>
-        ))}
+        <WeightRanking factors={factors} tiers={tiers} onChange={props.onTiersChange} />
       </section>
 
       <section>

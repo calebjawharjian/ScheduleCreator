@@ -1,27 +1,37 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchMetadata, generate, rank } from "./api";
 import { AlternativeList } from "./components/AlternativeList";
 import { Controls } from "./components/Controls";
 import { WeekGrid } from "./components/WeekGrid";
+import { formatTerm } from "./format";
+import { defaultTiers, tiersToWeights } from "./weights";
 import type {
   Alternative, GenerateResponse, Metadata, RankResponse,
 } from "./types";
 
 const EXAMPLE = "CSCI-UA 102, MATH-UA 121, EXPOS-UA 1, EG-UY 1004";
 
+// An empty time window means "no restriction", not midnight-to-midnight as a
+// literal preference -- so a blank picker (the default) and a full-day one
+// score identically. Kept out of state so the inputs themselves can stay
+// genuinely empty until the user sets a window.
+const FULL_DAY_START = "00:00";
+const FULL_DAY_END = "23:59";
+
 export default function App() {
   const [meta, setMeta] = useState<Metadata | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
 
   const [term, setTerm] = useState("fall2026");
-  const [courseText, setCourseText] = useState(EXAMPLE);
+  const [courseText, setCourseText] = useState("");
   const [generation, setGeneration] = useState<GenerateResponse | null>(null);
   const [generating, setGenerating] = useState(false);
 
-  const [preferredDays, setPreferredDays] = useState(["MON", "TUE", "WED"]);
-  const [timeStart, setTimeStart] = useState("11:00");
-  const [timeEnd, setTimeEnd] = useState("17:00");
-  const [weights, setWeights] = useState<Record<string, number>>({});
+  const [preferredDays, setPreferredDays] = useState<string[]>([]);
+  const [timeStart, setTimeStart] = useState("");
+  const [timeEnd, setTimeEnd] = useState("");
+  const [tiers, setTiers] = useState<string[][]>([]);
+  const weights = useMemo(() => tiersToWeights(tiers), [tiers]);
   const [required, setRequired] = useState<Record<string, string>>({});
   const [commuteMinutes, setCommuteMinutes] = useState(30);
 
@@ -33,7 +43,7 @@ export default function App() {
     fetchMetadata()
       .then((m) => {
         setMeta(m);
-        setWeights(Object.fromEntries(m.factors.map((f) => [f.name, f.default])));
+        setTiers(defaultTiers(m.factors.map((f) => f.name)));
       })
       .catch(() => setApiError(
         "Cannot reach the API. Start it with: ./venv/bin/python -m uvicorn api:app"));
@@ -74,8 +84,8 @@ export default function App() {
     rank({
       generation_id: generation.generation_id,
       preferred_days: preferredDays,
-      time_start: timeStart,
-      time_end: timeEnd,
+      time_start: timeStart || FULL_DAY_START,
+      time_end: timeEnd || FULL_DAY_END,
       weights,
       required,
       commute_minutes: commuteMinutes,
@@ -129,7 +139,7 @@ export default function App() {
           <span>Term</span>
           <select value={term} onChange={(e) => setTerm(e.target.value)}>
             {(meta?.terms ?? ["fall2026"]).map((t) => (
-              <option key={t} value={t}>{t}</option>
+              <option key={t} value={t}>{formatTerm(t)}</option>
             ))}
           </select>
         </label>
@@ -169,13 +179,12 @@ export default function App() {
               preferredDays={preferredDays}
               timeStart={timeStart}
               timeEnd={timeEnd}
-              weights={weights}
+              tiers={tiers}
               required={required}
               commuteMinutes={commuteMinutes}
               onDaysChange={setPreferredDays}
               onTimeChange={(s, e) => { setTimeStart(s); setTimeEnd(e); }}
-              onWeightChange={(name, value) =>
-                setWeights((w) => ({ ...w, [name]: value }))}
+              onTiersChange={setTiers}
               onRequiredChange={setRequired}
               onCommuteChange={setCommuteMinutes}
             />
