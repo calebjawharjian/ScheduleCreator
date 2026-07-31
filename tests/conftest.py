@@ -28,6 +28,16 @@ def load_rows(subject: str) -> list[dict]:
     return json.loads((FIXTURES / f"search_{subject}_{FALL_2026}.json").read_text())
 
 
+def load_brooklyn_rows(subject: str) -> list[dict]:
+    """The same search narrowed to NYU's Brooklyn location filter.
+
+    Recorded separately because campus cannot be derived from the course code:
+    MATH-UA 140 sections 021 and 022 meet in Brooklyn while its other 30
+    sections are at Washington Square.
+    """
+    return json.loads((FIXTURES / f"brooklyn_{subject}_{FALL_2026}.json").read_text())
+
+
 @pytest.fixture(autouse=True)
 def no_network(request, monkeypatch):
     """Fail loudly if any test reaches for the network.
@@ -60,15 +70,22 @@ def provider():
     seam added for testability.
     """
     from nyu_provider import NYUProvider
+    from campuses import BROOKLYN_CAMP_CODES
 
     p = NYUProvider()
     for subject in ("MATH-UA", "CSCI-UA", "EG-UY"):
-        p._cache[(FALL_2026, subject)] = load_rows(subject)
+        # The cache key includes the location filter, since the same subject
+        # returns different rows filtered and unfiltered.
+        p._cache[(FALL_2026, subject, None)] = load_rows(subject)
+        p._cache[(FALL_2026, subject, BROOKLYN_CAMP_CODES)] = load_brooklyn_rows(subject)
 
-    def no_network(*args, **kwargs):
-        raise AssertionError("test tried to hit the network")
+    def cached_only(term, subject, camp=None):
+        key = (term, subject, camp)
+        if key not in p._cache:
+            raise AssertionError(f"no recorded fixture for {key}")
+        return p._cache[key]
 
-    p._search_subject = lambda term, subject: p._cache[(term, subject)]
+    p._search_subject = cached_only
     return p
 
 

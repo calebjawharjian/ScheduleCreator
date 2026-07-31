@@ -65,6 +65,16 @@ class Constraint(ABC):
         where a constraint can say something more useful than its own name."""
         return self.describe()
 
+    def penalty(self, schedule: list[Section]) -> float:
+        """How badly this schedule misses, 0.0 when satisfied.
+
+        Only consulted when nothing satisfies everything and a best-fit answer
+        is better than no answer. The default is all-or-nothing; constraints
+        with a natural magnitude (minutes short) should override it so
+        near-misses can be ranked ahead of distant ones.
+        """
+        return 0.0 if self.allows(schedule) else 1.0
+
 
 class RequiredInstructor(Constraint):
     """Pin one course to one instructor.
@@ -127,22 +137,32 @@ class CommuteBuffer(Constraint):
     after the last one is the student's own time, not a scheduling problem, so
     only consecutive pairs within a day are checked.
 
-    Takes `campus_of` as a parameter rather than importing NYU's, so this stays
-    usable by any university that can name a campus per course code.
+    Reads `section.campus`, which the provider fills in from the university's
+    own data. Campus is per-section and cannot be derived from the course code:
+    NYU runs some Washington Square-coded courses in Brooklyn. A section with no
+    campus (online, abroad, unknown) imposes no travel time, since there is
+    nowhere to travel to.
+
+    `campus_of` is overridable so any provider that tags sections differently
+    can still use this.
     """
 
     def __init__(self, minutes: int = 30, campus_of=None):
         self.minutes = minutes
-        if campus_of is None:
-            from campuses import campus_of as nyu_campus_of
-            campus_of = nyu_campus_of
-        self._campus_of = campus_of
+        self._campus_of = campus_of or (lambda section: section.campus)
 
     def _day_timeline(self, schedule: list[Section]):
-        """Meetings grouped by day as (meeting, campus), earliest first."""
+        """Meetings grouped by day as (meeting, campus), earliest first.
+
+        Sections without a campus are dropped rather than treated as a distinct
+        location, so an online class between two Manhattan classes never looks
+        like a round trip.
+        """
         by_day: dict = {}
         for section in schedule:
-            campus = self._campus_of(section.course_code)
+            campus = self._campus_of(section)
+            if not campus:
+                continue
             for meeting in section.meetings:
                 by_day.setdefault(meeting.day, []).append((meeting, campus))
         for day in by_day:
@@ -174,8 +194,25 @@ class CommuteBuffer(Constraint):
                         f"({gap} min apart, needs {self.minutes})")
         return problems
 
+    def penalty(self, schedule: list[Section]) -> float:
+        """Total minutes of travel time this schedule is short by.
+
+        Lets a best-fit fallback rank near-misses: a schedule 5 minutes short
+        on one transition is far more usable than one 25 minutes short on
+        three, and both beat nothing at all.
+        """
+        shortfall = 0
+        for timeline in self._day_timeline(schedule).values():
+            for (earlier, a), (later, b) in zip(timeline, timeline[1:]):
+                if a == b:
+                    continue
+                gap = later.start - earlier.end
+                if gap < self.minutes:
+                    shortfall += self.minutes - gap
+        return float(shortfall)
+
     def explain(self, courses) -> str:
-        spanned = sorted({self._campus_of(c.code) for c in courses})
+        spanned = sorted({s.campus for c in courses for s in c.sections if s.campus})
         return (f"{self.describe()}: your courses span {' and '.join(spanned)}, "
                 f"and no combination leaves {self.minutes} minutes to travel "
                 f"between back-to-back classes. Try a smaller buffer, or drop a "
@@ -205,6 +242,41 @@ def satisfying(schedules: list[list[Section]],
     if not constraints:
         return schedules
     return [s for s in schedules if all(c.allows(s) for c in constraints)]
+
+
+def best_effort(schedules: list[list[Section]],
+                required: list[Constraint],
+                preferred: list[Constraint]):
+    """Satisfy everything if possible; otherwise return the closest misses.
+
+    Returns `(schedules, compromised)`, where `compromised` lists the preferred
+    constraints that had to give. Empty means nothing was compromised.
+
+    Two tiers, because not all requirements are equally negotiable. A named
+    professor is a stated preference the user called non-negotiable, so it is
+    never relaxed -- if it cannot be met, that is a real dead end worth
+    reporting. Travel time is physical reality, but a student with no
+    alternative still has to register for something, so returning the schedules
+    that come closest beats returning nothing.
+
+    Among near-misses, minimum total penalty wins, so a schedule five minutes
+    short on one transition ranks ahead of one half an hour short on three.
+    Scoring then orders whatever comes back, as always.
+    """
+    eligible = satisfying(schedules, required)
+    if not eligible:
+        return [], []
+
+    strict = satisfying(eligible, preferred)
+    if strict or not preferred:
+        return strict, []
+
+    penalties = [(sum(c.penalty(s) for c in preferred), s) for s in eligible]
+    lowest = min(cost for cost, _ in penalties)
+    closest = [s for cost, s in penalties if cost == lowest]
+    compromised = [c for c in preferred
+                   if any(not c.allows(s) for s in closest)]
+    return closest, compromised
 
 
 def section_survival(courses, constraint: Constraint) -> tuple[int, int]:

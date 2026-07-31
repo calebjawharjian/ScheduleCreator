@@ -1,0 +1,40 @@
+[
+ {
+  "key": "6464",
+  "code": "MATH-UA 140",
+  "title": "Linear Algebra",
+  "hide": "",
+  "crn": "9581",
+  "no": "021",
+  "total": "32",
+  "schd": "LEC",
+  "stat": "A",
+  "isCancelled": "",
+  "meets": "TR 11a-12:20p",
+  "mpkey": "2143",
+  "meetingTimes": "[{\"meet_day\":\"1\",\"start_time\":\"1100\",\"end_time\":\"1220\"},{\"meet_day\":\"3\",\"start_time\":\"1100\",\"end_time\":\"1220\"}]",
+  "instr": "",
+  "start_date": "2026-09-02",
+  "end_date": "2026-12-14",
+  "srcdb": "1268"
+ },
+ {
+  "key": "6465",
+  "code": "MATH-UA 140",
+  "title": "Linear Algebra",
+  "hide": "",
+  "crn": "9582",
+  "no": "022",
+  "total": "32",
+  "schd": "RCT",
+  "stat": "A",
+  "isCancelled": "",
+  "meets": "F 9:30-10:50a",
+  "mpkey": "2215",
+  "meetingTimes": "[{\"meet_day\":\"4\",\"start_time\":\"930\",\"end_time\":\"1050\"}]",
+  "instr": "",
+  "start_date": "2026-09-02",
+  "end_date": "2026-12-14",
+  "srcdb": "1268"
+ }
+]

@@ -5,6 +5,7 @@ import requests
 
 from models import Course, Section, SectionKind, Meeting, Day
 from providers import CourseProvider
+from campuses import BROOKLYN_CAMP_CODES, BROOKLYN, WASHINGTON_SQUARE
 
 URL = "https://bulletins.nyu.edu/class-search/api/"
 HEADERS = {"User-Agent": "ScheduleCreator/0.1 (personal project)"}
@@ -59,22 +60,45 @@ class NYUProvider(CourseProvider):
             self._cache: dict[tuple[str, str], list[dict]] = {}
             self._instructors = instructors
 
-    def _search_subject(self, term: str, subject: str) -> list[dict]:
-        if (term, subject) in self._cache:
-            return self._cache[(term, subject)]
+    def _search_subject(self, term: str, subject: str,
+                        camp: str | None = None) -> list[dict]:
+        """Rows for one subject, optionally narrowed to a location.
+
+        `camp` is part of the cache key, since the same subject returns
+        different rows filtered and unfiltered.
+        """
+        key = (term, subject, camp)
+        if key in self._cache:
+            return self._cache[key]
 
         params = {"page": "fose", "route": "search", "subject": subject}
-        payload = {
-            "other": {"srcdb": term},
-            "criteria": [{"field": "subject", "value": subject}],
-        }
+        criteria = [{"field": "subject", "value": subject}]
+        if camp:
+            criteria.append({"field": "camp", "value": camp})
+        payload = {"other": {"srcdb": term}, "criteria": criteria}
         response = requests.post(URL, params=params, data=json.dumps(payload),
                                  headers=HEADERS, timeout=30)
         response.raise_for_status()
         results = response.json().get("results", [])
 
-        self._cache[(term, subject)] = results
+        self._cache[key] = results
         return results
+
+    def _brooklyn_crns(self, term: str, subject: str) -> set[str]:
+        """CRNs meeting in Brooklyn, per NYU's own location filter.
+
+        One extra request per subject. Worth it: campus cannot be derived from
+        the course code, because NYU runs some Washington Square-coded courses
+        in Brooklyn. Only Brooklyn is queried -- see campuses.py for why the
+        Washington Square filter cannot serve as its complement.
+        """
+        try:
+            rows = self._search_subject(term, subject, camp=BROOKLYN_CAMP_CODES)
+        except requests.RequestException as exc:
+            print(f"warning: could not determine Brooklyn sections for "
+                  f"{subject}: {exc}; campus left unknown")
+            return set()
+        return {row["crn"] for row in rows}
 
     def _section_order(self, row: dict) -> tuple:
         """Sort key for section numbers like '001', '011a'. Digits first,
@@ -133,8 +157,10 @@ class NYUProvider(CourseProvider):
         subjects = {_subject_of(code) for code in wanted}
 
         rows: list[dict] = []
+        brooklyn_crns: set[str] = set()
         for subject in subjects:
             rows.extend(self._search_subject(term, subject))
+            brooklyn_crns |= self._brooklyn_crns(term, subject)
 
         by_code: dict[str, list[dict]] = {}
         for row in rows:
@@ -167,6 +193,8 @@ class NYUProvider(CourseProvider):
                     meetings=_parse_meetings(row.get("meetingTimes", "")),
                     parent_section_id=parents.get(row["crn"]),
                     section_no=row.get("no"),
+                    campus=(BROOKLYN if row["crn"] in brooklyn_crns
+                            else WASHINGTON_SQUARE),
                 ))
 
             courses[code] = course

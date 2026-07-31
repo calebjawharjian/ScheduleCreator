@@ -66,7 +66,7 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `cs_instructors.py` | CS dept instructor-name source |
 | `combined_instructors.py` | Merges multiple instructor sources into one for `NYUProvider` |
 | `scheduler.py` | `valid_bundles`, `has_conflict`, `generate_schedules` |
-| `campuses.py` | NYU campus inference from school code (UA/GA Manhattan, UY/GY Brooklyn) |
+| `campuses.py` | NYU campus constants + the Location filter codes the provider queries |
 | `constraints.py` | `Constraint` interface + `RequiredInstructor` + `CommuteBuffer`; hard filters applied before scoring |
 | `ratings.py` | `RatingProvider` interface + `RMPRatings` (RateMyProfessor) + `NullRatings` |
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules` |
@@ -104,6 +104,14 @@ independent concerns. Swapping the data source touches nothing downstream.
   taught on a non-preferred day. Requirements therefore live in `constraints.py`
   and remove candidates *before* `rank_schedules` ever sees them. Constraints
   decide what is eligible; scoring decides what is best among the eligible.
+- **Constraints come in two tiers, and only the lower one bends.** A named
+  professor is a stated non-negotiable and is never relaxed — if it cannot be
+  met, that is a real dead end worth reporting. Travel time is physical
+  reality, but a student with no commuting-friendly option still has to
+  register for something, so `best_effort` falls back to the schedules that
+  come *closest*, ranked by `Constraint.penalty` (minutes short), and names the
+  compromise rather than hiding it. Silently dropping either would be worse
+  than both failing loudly and returning a flawed-but-labeled answer.
 
 ---
 
@@ -258,36 +266,50 @@ GET https://cs.nyu.edu/dynamic/courses/schedule/?semester=fall_2026
   Useful reminder that these pages are live and a "miss" is often the
   department not having decided yet, not a broken join.
 
-### Campus: INFERRED from the school code, not published
+### Campus: from NYU's own Location filter (the class search knows)
 
-The class-search API has **no campus, location, or building field** — checked
-across EG-UY and CSCI-UA rows for Fall 2026, all empty. Campus therefore comes
-from the school code, the half of the subject after the hyphen:
+The search *response* carries no campus, location, or building field. But the
+search *form* has a Location dropdown, and its values can be passed back as a
+`camp` criterion:
 
 ```
-CSCI-UA 102 -> UA -> Washington Square      EG-UY 1004 -> UY -> Brooklyn (Tandon)
-MATH-GA 2010 -> GA -> Washington Square     MA-GY 6213 -> GY -> Brooklyn (Tandon)
+POST .../class-search/api/?page=fose&route=search&subject=MATH-UA
+body: {"other": {"srcdb": "1268"}, "criteria": [
+         {"field": "subject", "value": "MATH-UA"},
+         {"field": "camp",    "value": "WS@BRKLN,WS@INDUS"}]}
 ```
 
-Tandon's school codes end in `Y` (`UY` undergraduate, `GY` graduate); the
-Washington Square schools do not. Isolated in `campuses.py` so it can be
-corrected in one place, and `CommuteBuffer` takes the resolver as a parameter
-rather than importing it, so the constraint itself stays university-agnostic.
+Location codes come from `select#crit-camp` on `bulletins.nyu.edu/class-search/`.
+Brooklyn is `WS@BRKLN,WS@INDUS`.
 
-- **Anything unrecognized defaults to Washington Square.** Right for the
-  overwhelming majority of codes a student combines, but NYU has other sites
-  (Shanghai, Abu Dhabi) that this does not model.
+**An earlier version inferred campus from the school code (`UY`/`GY` = Brooklyn)
+and was WRONG.** NYU runs Washington Square-coded courses in Brooklyn: 9 MATH-UA
+sections in Fall 2026. The inference called them Manhattan and silently
+permitted impossible schedules. Do not reintroduce it.
+
+- **Campus is per SECTION, not per course.** MATH-UA 140 has 32 sections:
+  021 and 022 meet in Brooklyn, the other 30 at Washington Square. Anything
+  keyed by course code structurally cannot represent this. `Section.campus`
+  holds it, filled in by the provider.
+- **The Washington Square filter is NOT the complement of Brooklyn.** Its
+  `WS*` wildcard also matches `WS@BRKLN`, so it returned all 309 MATH-UA rows
+  including the 9 Brooklyn ones — overlap of exactly 9, "in neither" of 0.
+  Query **Brooklyn only** and treat everything else as Washington Square; that
+  is the only reading that partitions correctly.
+- Costs **one extra request per subject**, cached alongside the unfiltered one
+  (the cache key includes `camp`).
 - **A cross-campus back-to-back is not a time conflict.** Manhattan 12:15 →
   Brooklyn 12:30 has no interval overlap, so `has_conflict` accepts it, but no
-  one can attend both. Verified against live Fall 2026 data: for
-  `["CSCI-UA 101", "EG-UY 1004"]`, 38 of 129 "conflict-free" schedules were
-  physically unattendable, including a 10-minute Brooklyn → Manhattan hop.
+  one can attend both. Verified live: for `["CSCI-UA 101", "EG-UY 1004"]`,
+  38 of 129 "conflict-free" schedules were physically unattendable.
 - **Only transitions between classes are constrained**, never the trip to the
   first class or home from the last. Those are the student's own time.
+- **Sections with no campus** (online, abroad, untagged) impose no travel time
+  and are skipped, so an online class between two Manhattan classes never looks
+  like a round trip.
 - **A large buffer can still leave many schedules**, because a schedule whose
   campuses fall on different days has no same-day transition to constrain. Not
-  a bug — an 8-hour buffer legitimately passes a Mon/Wed-Manhattan,
-  Tue/Thu-Brooklyn week.
+  a bug — a 10-hour buffer legitimately left 57 of 129 schedules.
 
 ### RateMyProfessor (ratings)
 
@@ -429,6 +451,13 @@ Bari"`) that filter before scoring, and `CommuteBuffer`, which rejects
 cross-campus back-to-backs that are physically unattendable. The second
 constraint needed no changes to the seam the first one established, which is
 the evidence that seam was worth building.
+
+Then campus was corrected: it now comes from NYU's own Location filter and is
+tagged per section, replacing a school-code inference that was wrong for 9
+MATH-UA sections. Plus `best_effort`, which returns the closest-fitting
+schedules (with the compromise named) when travel time cannot be satisfied,
+instead of returning nothing. The "best fit" wording it produces is written to
+be picked up by `narrator.py` later.
 
 ## Resume framing
 

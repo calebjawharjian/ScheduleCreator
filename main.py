@@ -289,18 +289,19 @@ if not schedules:
 # Hard requirements filter before scoring. A weight can never express "must":
 # it only makes matching schedules score well, so a non-negotiable professor
 # can still be outranked on the other factors.
-if commute_minutes > 0:
-    from constraints import CommuteBuffer
-    requirements = list(requirements) + [CommuteBuffer(commute_minutes)]
-
-if requirements:
-    from constraints import satisfying, explain_unsatisfiable
+#
+# Two tiers. Named professors are never relaxed -- the user called them
+# non-negotiable. Travel time is relaxed only if nothing else is left, because
+# a student with no commuting-friendly option still has to register for
+# something; the compromise is reported rather than hidden.
+compromised = []
+if requirements or commute_minutes > 0:
+    from constraints import (
+        CommuteBuffer, RequiredInstructor, best_effort, explain_unsatisfiable)
 
     # A requirement naming a course you didn't request is incoherent, and left
     # as a warning it is dangerous: a typo'd course code makes the requirement
     # silently vacuous, so you get a ranked list that ignores a non-negotiable.
-    from constraints import RequiredInstructor
-
     loaded = {c.code for c in courses}
     stray = [r for r in requirements
              if isinstance(r, RequiredInstructor) and r.course_code not in loaded]
@@ -310,12 +311,24 @@ if requirements:
                        f"in your course list." for r in stray]
                       + [f"Requested courses: {', '.join(sorted(loaded))}"]))
 
-    schedules = satisfying(schedules, requirements)
-    print(f"{len(schedules)} of those satisfy your requirements")
+    commute = [CommuteBuffer(commute_minutes)] if commute_minutes > 0 else []
+    schedules, compromised = best_effort(schedules, requirements, commute)
+
     if not schedules:
         raise SystemExit(
             "\nNo schedules satisfy your requirements.\n"
             + "\n".join(explain_unsatisfiable(courses, requirements)))
+
+    if compromised:
+        print(f"{len(schedules)} best-fit schedules (nothing satisfies "
+              f"everything)")
+        for constraint in compromised:
+            print(f"  compromise: {constraint.describe()} could not be met")
+            worst = constraint.violations(schedules[0])
+            for line in worst:
+                print(f"    {line}")
+    else:
+        print(f"{len(schedules)} of those satisfy your requirements")
 print()
 
 prefs = Preferences(

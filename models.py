@@ -48,6 +48,10 @@ class Section:
     parent_section_id: str | None = None   # set on a recitation/lab tied to a lecture
     is_open: bool = True
     section_no: str | None = None   # '001', for joining to department listings
+    # Where this section physically meets. Per-section, not per-course: some
+    # MATH-UA sections meet in Brooklyn while the rest are at Washington Square.
+    # None means unknown or not location-bound (online, abroad).
+    campus: str | None = None
 
 
 @dataclass

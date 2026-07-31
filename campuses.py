@@ -1,45 +1,46 @@
-"""Which campus a course meets on. NYU-specific, INFERRED from the course code.
+"""Campus, taken from NYU's own location filter rather than inferred.
 
-The class-search API publishes no campus, location, or building field -- checked
-across EG-UY and CSCI-UA rows for Fall 2026, all empty. So campus comes from
-NYU's school code, the second half of the subject:
+An earlier version of this module guessed campus from the school code (`UY`/`GY`
+= Brooklyn, everything else Washington Square). **That was wrong**, and wrong in
+the dangerous direction: it silently permitted impossible schedules. NYU runs
+some Washington Square-coded courses in Brooklyn -- 9 MATH-UA sections in Fall
+2026, including MATH-UA 140 section 021 and MATH-UA 251 section 007. The class
+search itself knows better, so ask it.
 
-    CSCI-UA 102  -> UA -> Washington Square (Manhattan)
-    EG-UY 1004   -> UY -> Brooklyn (Tandon)
-    MA-GY 6213   -> GY -> Brooklyn (Tandon)
-
-Tandon's school codes end in Y (UY undergraduate, GY graduate); the Washington
-Square schools do not. That is a real NYU convention rather than a guess, but it
-is still an inference from a naming scheme, so it is isolated here where it can
-be corrected in one place -- and kept out of `constraints.py`, which stays
-university-agnostic by taking a resolver instead of hardcoding this.
-
-Known limitation: NYU has sites beyond these two (Shanghai, Abu Dhabi, and
-scattered Manhattan buildings). Anything not recognized as Tandon is treated as
-Washington Square, which is right for the overwhelming majority of course codes
-a student combines but would need revisiting to model those sites properly.
+Campus is a property of the **section**, not the course. MATH-UA 140 has 32
+sections: 021 and 022 meet in Brooklyn, the other 30 at Washington Square.
+Anything keyed by course code cannot represent that.
 """
 from __future__ import annotations
 
 WASHINGTON_SQUARE = "Washington Square"
 BROOKLYN = "Brooklyn (Tandon)"
 
-# School codes that meet in Brooklyn rather than Washington Square.
-BROOKLYN_SCHOOLS = {"UY", "GY"}
+# Values from the class search's own Location dropdown (`select#crit-camp`),
+# passed as a `camp` criterion.
+#
+# Only Brooklyn is queried. The Washington Square option is NOT the complement:
+# its `WS*` wildcard also matches `WS@BRKLN`, so it returns Brooklyn sections
+# too -- for MATH-UA it returned all 309 rows including the 9 Brooklyn ones.
+# Querying Brooklyn and treating everything else as Washington Square is the
+# only reading of this filter that partitions correctly.
+BROOKLYN_CAMP_CODES = "WS@BRKLN,WS@INDUS"
 
-
-def school_of(course_code: str) -> str:
-    """'CSCI-UA 102' -> 'UA'. The half of the subject after the hyphen."""
-    subject = course_code.split()[0]
-    _, _, school = subject.rpartition("-")
-    return school.upper()
-
-
-def campus_of(course_code: str) -> str:
-    """Which campus a course meets on."""
-    return BROOKLYN if school_of(course_code) in BROOKLYN_SCHOOLS else WASHINGTON_SQUARE
+# Kept for reference; deliberately unused. See the note above before reaching
+# for it as a complement to the Brooklyn query.
+WASHINGTON_SQUARE_CAMP_CODES = (
+    "AD@GLOBAL-WS,AD@WS,SH@GLOBAL-WS,WS*,WS@2BRD,WS@JD,WS@MT,"
+    "WS@OC,WS@PU,WS@WS,WS@WW,AD@GLOBAL-WS"
+)
 
 
 def campuses_in(courses) -> set[str]:
-    """Every campus represented across these courses."""
-    return {campus_of(course.code) for course in courses}
+    """Every campus represented across these courses' sections.
+
+    Reads section tags, so a Manhattan course with one Brooklyn section counts
+    as spanning both -- which is exactly the case that motivated this.
+    """
+    return {section.campus
+            for course in courses
+            for section in course.sections
+            if section.campus}

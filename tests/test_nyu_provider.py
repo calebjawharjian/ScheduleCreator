@@ -119,6 +119,34 @@ def test_requested_order_is_preserved(provider):
     assert [c.code for c in provider.get_courses(FALL_2026, codes)] == codes
 
 
+def test_brooklyn_sections_of_a_ua_course_are_tagged_brooklyn(provider):
+    """The regression. MATH-UA looks like a Washington Square subject, but NYU
+    runs sections 021 and 022 of MATH-UA 140 in Brooklyn. Inferring campus from
+    the course code called them Manhattan and silently allowed impossible
+    back-to-backs; the location filter gets it right."""
+    from campuses import BROOKLYN, WASHINGTON_SQUARE
+
+    course = provider.get_courses(FALL_2026, ["MATH-UA 140"])[0]
+    by_no = {s.section_no: s for s in course.sections}
+
+    assert by_no["021"].campus == BROOKLYN
+    assert by_no["022"].campus == BROOKLYN
+    assert by_no["001"].campus == WASHINGTON_SQUARE
+    assert sum(1 for s in course.sections if s.campus == BROOKLYN) == 2
+
+
+def test_campus_is_tagged_on_every_section(provider):
+    course = provider.get_courses(FALL_2026, ["CSCI-UA 101"])[0]
+    assert all(s.campus for s in course.sections)
+
+
+def test_tandon_sections_are_brooklyn(provider):
+    from campuses import BROOKLYN
+
+    course = provider.get_courses(FALL_2026, ["EG-UY 1004"])[0]
+    assert all(s.campus == BROOKLYN for s in course.sections)
+
+
 def test_instructor_is_empty_from_the_api_alone(provider):
     """`instr` is always empty in NYU's public search; names come only from the
     department enrichment pass. Anything relying on this field would be dead."""
