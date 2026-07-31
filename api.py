@@ -1,17 +1,19 @@
 """HTTP layer over the scheduler. Contains no scheduling logic of its own.
 
 Split into two endpoints because the costs are wildly asymmetric, and that
-asymmetry is the whole reason the UI can feel live. Measured on a real
-five-course list (120,119 schedules):
+asymmetry is the whole reason the UI can feel live. Measured end to end over
+HTTP on a real four-course list (120,119 schedules):
 
-    generation   ~7s    depends on term + courses
-    filtering    ~2.6s  depends on required professors + commute buffer
-    ranking      0.44s  depends on preferred days, time window, weights
+    POST /generate  cold    18.7s   term + courses; also the network fetches
+    POST /generate  cached   0.00s
+    POST /rank      cold     0.73s  required professors + commute buffer
+    POST /rank      warm     0.14s  preferred days, time window, weights
 
 The user drags weight sliders continuously and changes constraints
 deliberately, so `/generate` runs once per course list, the filtered set is
-cached per constraint set, and a slider drag costs only the 0.44s ranking pass.
-One endpoint doing all three would make every drag a 13-second request.
+cached separately per constraint set, and a slider drag costs only the warm
+ranking pass. One endpoint doing all three would make every drag a
+~19-second request.
 
 Caches are in-process dicts. That is honest for a single-process personal
 project and deliberately the thing to replace first if this is ever deployed
@@ -19,6 +21,7 @@ across workers -- see `_Store`.
 """
 from __future__ import annotations
 from dataclasses import dataclass
+import os
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
@@ -44,11 +47,20 @@ DEFAULT_WEIGHTS = {PROFESSOR: 3, TIME: 2, DAYS: 1,
 app = FastAPI(title="ScheduleCreator", version="0.1")
 
 # The dev frontend runs on a different port, so the browser treats it as a
-# different origin. Wide open is fine while this is localhost-only; it is not
-# fine on a deployed instance.
+# different origin and blocks every call unless the origin is allow-listed.
+# Overridable so `dev.sh` can keep both sides consistent when the ports are
+# changed; a deployed instance must set this to its real origin rather than
+# relying on the localhost default.
+ALLOWED_ORIGINS = [
+    origin.strip() for origin in
+    os.environ.get("SCHEDULER_ALLOWED_ORIGINS",
+                   "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
