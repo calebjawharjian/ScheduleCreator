@@ -1,0 +1,139 @@
+"""Provider tests, driven by recorded class-search responses.
+
+These run the real parsing and linkage code; only the HTTP fetch is skipped.
+See conftest.provider for why the cache is pre-populated instead of mocking.
+"""
+import pytest
+
+from models import Day, SectionKind
+from nyu_provider import _block_stem, _to_minutes, _parse_meetings, KIND_MAP
+from conftest import FALL_2026
+
+
+# --- pure helpers ------------------------------------------------------------
+
+def test_block_stem_parses_tandon_numbering():
+    assert _block_stem("A1LB") == "A1"
+    assert _block_stem("A1LC") == "A1"
+    assert _block_stem("B12RC") == "B12"
+
+
+def test_block_stem_is_none_for_cas_numbering():
+    """CAS sections name no block, which is what selects the sequential
+    strategy. Returning a stem here would silently switch strategies."""
+    assert _block_stem("001") is None
+    assert _block_stem("011a") is None
+    assert _block_stem("") is None
+    assert _block_stem(None) is None
+
+
+def test_three_digit_start_times_are_padded():
+    """The API returns '930' rather than '0930'; parsing without zfill would
+    read it as 09:30 -> 93 minutes past midnight."""
+    assert _to_minutes("930") == 9 * 60 + 30
+    assert _to_minutes("1400") == 14 * 60
+
+
+def test_meeting_times_are_a_json_string_nested_in_the_json():
+    raw = '[{"meet_day": "0", "start_time": "930", "end_time": "1045"}]'
+    meetings = _parse_meetings(raw)
+    assert len(meetings) == 1
+    assert meetings[0].day == Day.MON      # meet_day is 0-indexed from Monday
+    assert meetings[0].start == 570
+
+
+def test_no_meeting_times_yields_no_meetings():
+    assert _parse_meetings("") == []
+
+
+# --- linkage: the two strategies --------------------------------------------
+
+def test_tandon_lab_links_to_its_own_block_not_the_previous_one(provider):
+    """Regression. 'A1LB' sorts before 'A1LC' (same digits, so lexicographic
+    order decides and LB < LC), so a sequential scan attached every lab to the
+    PREVIOUS block's lecture and orphaned the first one. Invisible to the
+    overlap check, because those blocks meet on different days."""
+    course = provider.get_courses(FALL_2026, ["EG-UY 1004"])[0]
+    by_id = {s.section_id: s for s in course.sections}
+
+    labs = [s for s in course.sections if s.kind == SectionKind.LAB]
+    assert labs, "fixture should contain labs"
+
+    for lab in labs:
+        assert lab.parent_section_id is not None, f"{lab.section_no} orphaned"
+        parent = by_id[lab.parent_section_id]
+        assert _block_stem(lab.section_no) == _block_stem(parent.section_no)
+        assert parent.kind == SectionKind.LECTURE
+
+
+def test_every_tandon_non_lecture_is_linked(provider):
+    course = provider.get_courses(FALL_2026, ["EG-UY 1004"])[0]
+    orphans = [s for s in course.sections
+               if s.kind != SectionKind.LECTURE and not s.parent_section_id]
+    assert orphans == []
+
+
+def test_cas_recitation_links_to_the_lecture_that_starts_its_block(provider):
+    course = provider.get_courses(FALL_2026, ["MATH-UA 121"])[0]
+    by_id = {s.section_id: s for s in course.sections}
+
+    for s in course.sections:
+        if s.kind == SectionKind.LECTURE:
+            continue
+        parent = by_id[s.parent_section_id]
+        assert parent.kind == SectionKind.LECTURE
+        # Blocks run 001,006,011...: a recitation follows its own lecture.
+        assert int(parent.section_no) < int(s.section_no)
+
+
+def test_no_recitation_overlaps_its_own_lecture(provider):
+    """The original linkage guard: a mislink usually shows up as a section
+    colliding with the lecture it supposedly belongs to."""
+    for code in ("MATH-UA 121", "CSCI-UA 102", "EG-UY 1004"):
+        course = provider.get_courses(FALL_2026, [code])[0]
+        by_id = {s.section_id: s for s in course.sections}
+        for s in course.sections:
+            if s.kind == SectionKind.LECTURE or not s.parent_section_id:
+                continue
+            lecture = by_id[s.parent_section_id]
+            assert not any(a.overlaps(b) for a in s.meetings for b in lecture.meetings), \
+                f"{code} {s.section_no} overlaps its lecture {lecture.section_no}"
+
+
+# --- course assembly ---------------------------------------------------------
+
+def test_sections_carry_the_fields_downstream_code_needs(provider):
+    course = provider.get_courses(FALL_2026, ["MATH-UA 121"])[0]
+    s = course.sections[0]
+    assert s.section_id and s.section_no          # crn and join key
+    assert s.course_code == "MATH-UA 121"
+    assert s.kind in set(KIND_MAP.values())
+
+
+def test_unknown_course_code_is_absent_rather_than_empty(provider):
+    assert provider.get_courses(FALL_2026, ["MATH-UA 9999"]) == []
+
+
+def test_requested_order_is_preserved(provider):
+    codes = ["CSCI-UA 102", "MATH-UA 121", "CSCI-UA 101"]
+    assert [c.code for c in provider.get_courses(FALL_2026, codes)] == codes
+
+
+def test_instructor_is_empty_from_the_api_alone(provider):
+    """`instr` is always empty in NYU's public search; names come only from the
+    department enrichment pass. Anything relying on this field would be dead."""
+    course = provider.get_courses(FALL_2026, ["CSCI-UA 101"])[0]
+    assert all(s.instructor is None for s in course.sections)
+
+
+def test_enrichment_overlays_department_names(provider, offline_pages):
+    from combined_instructors import CombinedInstructors
+    from ma_instructors import MAInstructors
+    from cs_instructors import CSInstructors
+
+    provider._instructors = CombinedInstructors(MAInstructors(), CSInstructors())
+    courses = provider.get_courses(FALL_2026, ["MATH-UA 121", "CSCI-UA 101"])
+
+    named = [s for c in courses for s in c.sections
+             if s.kind == SectionKind.LECTURE and s.instructor]
+    assert named, "expected department names to be overlaid onto lectures"

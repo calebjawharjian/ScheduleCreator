@@ -36,7 +36,11 @@ This project is a learning exercise as much as a deliverable. When helping:
 - System Python is PEP 668 protected (`externally-managed-environment`). Never use
   `--break-system-packages`; fix the venv instead. A broken venv gets rebuilt:
   `rm -rf venv && python3 -m venv venv && source venv/bin/activate`.
-- Dependencies: `requests`, `beautifulsoup4`, `anthropic`.
+- Dependencies: `requests`, `beautifulsoup4`, `anthropic`, `pytest`.
+- **Tests:** `./venv/bin/python -m pytest` runs the offline suite (no network,
+  ~1.5s). `pytest -m live` runs the checks that hit NYU's real endpoints. An
+  autouse fixture makes any unmarked test that reaches the network fail, so the
+  offline suite cannot silently start depending on it.
 - `ANTHROPIC_API_KEY` is exported for the planned LLM narrator (see Known
   gaps — not built yet) and is **session-only**, so a fresh terminal loses
   it. Moving to a `.env` + python-dotenv (gitignored) is a pending cleanup
@@ -64,8 +68,8 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `scheduler.py` | `valid_bundles`, `has_conflict`, `generate_schedules` |
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules` |
 | `main.py` | CLI entry point: argparse flags, interactive prompts when run bare, result display |
-| `validate_linkage.py` | **Keep.** Guards both linkage strategies: overlap + block-stem checks |
-| `validate_join.py` | **Keep.** Guards both instructor-source joins (Math + CS) |
+| `tests/` | pytest suite. Offline by default; `tests/fixtures/` holds recorded responses |
+| `tests/test_live_data.py` | **Keep.** Live guards for linkage + both joins; `pytest -m live` |
 
 ### Design principles established
 
@@ -162,15 +166,17 @@ Tandon numbering is silently and catastrophically wrong: `A1LB` sorts *before*
 lab gets attached to the **previous** block's lecture — `B1LB → A1LC`,
 `C1LB → B1LC` — and the very first lab, having no preceding lecture, is orphaned
 and silently dropped from every bundle. This shipped undetected because the
-`validate_linkage.py` overlap test cannot see it: `B1LB` (Wed 08:00-10:50) does
-not overlap `A1LC` (Mon 12:30-13:50), so nothing collides. This is exactly the
-blind spot the caveat below warned about, found in the wild on EG-UY 1004.
+overlap check cannot see it: `B1LB` (Wed 08:00-10:50) does not overlap `A1LC`
+(Mon 12:30-13:50), so nothing collides. It also *printed* its findings rather
+than asserting them, so "0 self-conflicts" scrolled by while every lab was
+mislinked. This is exactly the blind spot the caveat below warned about, found
+in the wild on EG-UY 1004.
 
 Evidence supporting it:
 - MATH-UA 121 Fall 2026: 7 lectures at sections 001, 006, 011, 016, 021, 026, 031,
   a perfectly regular stride of 5 (one lecture + four recitations), totaling the 35
   sections the API returns.
-- `validate_linkage.py` reports **0 recitations overlapping their own assigned
+- The live linkage tests report **0 recitations overlapping their own assigned
   lecture** and 0 orphans. This has real power: recitation 020 (Mon 2:00-3:15)
   conflicts with lecture 021 (MW 2:00-3:15), so an off-by-one-block mapping would
   have produced a detectable collision.
@@ -180,11 +186,12 @@ Evidence supporting it:
 
 Caveat to keep in mind: most recitations meet Friday while lectures do not, so a
 mislink between two Friday-free lectures could still escape detection by the
-overlap test alone. `validate_linkage.py` now also checks that a section's block
-stem matches its parent lecture's stem, which catches cross-block mislinks
-regardless of meeting times — but only where sections are stem-numbered. For CAS
-numeric sections the overlap test is still the only guard. Run
-`validate_linkage.py` whenever a new department is added.
+overlap test alone. The live tests now also check that a section's block stem
+matches its parent lecture's stem, which catches cross-block mislinks regardless
+of meeting times — but only where sections are stem-numbered. For CAS numeric
+sections the overlap test is still the only guard. Run `pytest -m live` whenever
+a new department is added, and add its course to `LINKAGE_COURSES` in
+`tests/test_live_data.py`.
 
 ### Math department instructor source (Courant)
 
@@ -302,7 +309,10 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   than a flat tie at 0.71. The exact ties that remain are schedules differing
   only in which recitation slot they picked, where those slots happen to have
   identical day/time — a correct result, not a bug.
-- **No tests.** Only the two validation scripts.
+- **Coverage is behavioral, not exhaustive.** 70 offline tests plus 7 live ones
+  cover the scoring factors, both linkage strategies, bundling, and both
+  scrapers. `main.py` itself is untested (argparse wiring, prompts, display
+  formatting), and there is no coverage measurement.
 - **Sections with no meeting times** (online/TBA) cannot conflict with anything and
   contribute nothing to day/time factors, which can inflate their schedules' scores.
 - **Course-wide recitations** (`parent_section_id = None`, pairing with any lecture)
@@ -323,10 +333,11 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
    low-review-count ratings so a single 5-star review doesn't outrank a 4.3 with 100
    reviews. **This is where the genuinely fuzzy entity matching lives** (catalog name
    to RMP profile), unlike the exact Math/CS joins.
-2. **Tests**, converting the two validation scripts into real ones.
-3. **Build `narrator.py`**, the LLM explanation layer described above — it doesn't
+2. **Build `narrator.py`**, the LLM explanation layer described above — it doesn't
    exist yet (see Known gaps). This has to land before lazy/cached narration (next
    item) makes sense, since that step presupposes narration already exists.
+3. **Top-N diversity.** With a realistic course load the top ten are near-identical
+   (see Known gaps). Collapse or spread them so the list shows real alternatives.
 4. **FastAPI route layer** over the existing logic.
 5. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
    bars, expandable AI explanation.
@@ -334,8 +345,9 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
    narrating the whole ranked list.
 7. Deploy, with a README containing an architecture diagram and a demo GIF.
 
-Done since the last pass: new scoring factors (days on campus, idle time, late
-start), the CS department instructor source, and CLI input on `main.py`.
+Done since the last pass: the Tandon block-linkage fix, multi-component bundling,
+meeting times in the output, and the pytest suite (70 offline + 7 live), which
+replaced `validate_linkage.py` and `validate_join.py`.
 
 ## Resume framing
 
