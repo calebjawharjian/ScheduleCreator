@@ -227,6 +227,19 @@ NYU publishes no lecture-to-recitation relationship anywhere. **Two numbering
 schemes exist and they need two different strategies.** Both live in
 `nyu_provider._link_sections`.
 
+**0. Single lecture — not an inference.** If a course has exactly one lecture,
+every non-lecture section belongs to it; there is no other lecture it could
+belong to. Tried first, and it rescues numbering neither scheme below parses.
+Found in the wild on **CS-UY 2204**, whose sections are `ALAB`, `BLAB`, `CLAB`,
+`DLAB` and `LEC` — **no digits anywhere**. `_block_stem` needs `\d+` so it
+returns None for all five (skipping the stem strategy), and `_section_order`
+extracts no digits so all five tie at 0 and break lexicographically, sorting
+the four labs *before* the lecture. The sequential scan then met a lab with no
+preceding lecture four times and dropped every one. The damage was not a
+mislink but a **missing component**: the course bundled as lecture-only, so the
+tool offered a schedule that cannot be registered. Fixing it took that course
+list from 105 conflict-free schedules to 246.
+
 **1. Stem-based (Tandon).** Sections are named block stem + component code:
 `A1LC` is the lecture of block `A1`, `A1LB` its lab, `A1RC` its recitation.
 The block is named explicitly, so linkage is a dictionary lookup and ordering
@@ -274,6 +287,15 @@ of meeting times — but only where sections are stem-numbered. For CAS numeric
 sections the overlap test is still the only guard. Run `pytest -m live` whenever
 a new department is added, and add its course to `LINKAGE_COURSES` in
 `tests/test_live_data.py`.
+
+### Cross-listing
+
+A course can appear under two codes for the same physical class: CS-UY 2204 is
+also listed as ECE-UY 2204, which is why Albert shows two lecture CRNs (14245
+and 14250) at identical days and times while the public search returns one.
+Not a data error and not something to "fix" — but do not treat a section count
+that disagrees with Albert as evidence of a scraping bug, and note that a
+student enrolling in both codes would be double-booked with themselves.
 
 ### Math department instructor source (Courant)
 
@@ -492,7 +514,7 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   interchangeable, which `distinct_schedules` now collapses on display. Ties
   that survive collapsing are different weeks scoring equally, which is a
   correct result, not a bug.
-- **Coverage is behavioral, not exhaustive.** 193 offline tests plus 9 live ones
+- **Coverage is behavioral, not exhaustive.** 195 offline tests plus 9 live ones
   cover the scoring factors, duplicate collapsing, both linkage strategies,
   bundling, campus tagging, constraints, and both scrapers. `main.py` itself is
   untested (argparse wiring, prompts, display formatting), and there is no

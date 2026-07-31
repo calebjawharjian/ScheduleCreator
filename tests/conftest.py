@@ -73,7 +73,7 @@ def provider():
     from campuses import BROOKLYN_CAMP_CODES
 
     p = NYUProvider()
-    for subject in ("MATH-UA", "CSCI-UA", "EG-UY"):
+    for subject in ("MATH-UA", "CSCI-UA", "EG-UY", "CS-UY"):
         # The cache key includes the location filter, since the same subject
         # returns different rows filtered and unfiltered.
         p._cache[(FALL_2026, subject, None)] = load_rows(subject)

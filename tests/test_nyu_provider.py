@@ -165,3 +165,32 @@ def test_enrichment_overlays_department_names(provider, offline_pages):
     named = [s for c in courses for s in c.sections
              if s.kind == SectionKind.LECTURE and s.instructor]
     assert named, "expected department names to be overlaid onto lectures"
+
+
+def test_a_lone_lecture_adopts_every_section_whatever_the_numbering(provider):
+    """Regression, found in the wild on CS-UY 2204. Its sections are 'ALAB',
+    'BLAB', 'CLAB', 'DLAB' and 'LEC' -- no digits at all, so no block stem
+    parses and the numeric sort ties them all at zero, ordering the four labs
+    before the lecture. The sequential scan then saw a lab with no preceding
+    lecture four times and dropped all of them from every bundle.
+
+    With one lecture there is nothing to infer: a lab has no other lecture it
+    could belong to."""
+    course = provider.get_courses(FALL_2026, ["CS-UY 2204"])[0]
+    lectures = [s for s in course.sections if s.kind == SectionKind.LECTURE]
+    labs = [s for s in course.sections if s.kind == SectionKind.LAB]
+
+    assert len(lectures) == 1, "fixture should have exactly one lecture"
+    assert len(labs) == 4
+    assert all(lab.parent_section_id == lectures[0].section_id for lab in labs)
+
+
+def test_a_lone_lecture_still_bundles_with_each_lab(provider):
+    """The consequence that actually mattered: orphaned labs vanish from every
+    bundle, so the student is offered a lecture with no lab at all."""
+    from scheduler import valid_bundles
+
+    course = provider.get_courses(FALL_2026, ["CS-UY 2204"])[0]
+    bundles = valid_bundles(course)
+    assert len(bundles) == 4, "one bundle per lab"
+    assert all(any(s.kind == SectionKind.LAB for s in b) for b in bundles)

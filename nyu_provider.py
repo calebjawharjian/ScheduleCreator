@@ -110,8 +110,16 @@ class NYUProvider(CourseProvider):
     def _link_sections(self, code: str, usable: list[dict]) -> dict[str, str | None]:
         """Map each non-lecture section's CRN to the CRN of its lecture.
 
-        Two numbering schemes need two strategies:
+        Three strategies, tried in order of how much they assume:
 
+        * **Single lecture.** If the course has exactly one lecture, every
+          non-lecture section belongs to it. This is not an inference at all --
+          there is no other lecture it could belong to -- so it goes first and
+          overrides the schemes below. It also rescues numbering neither scheme
+          parses: CS-UY 2204's sections are 'ALAB', 'BLAB', 'CLAB', 'DLAB' and
+          'LEC', which carry no digits, so `_block_stem` returns None for all of
+          them and `_section_order` ties them all at 0 -- sorting the labs
+          *before* the lecture lexicographically and orphaning all four.
         * **Stem-based** (Tandon: 'A1LC' lecture, 'A1LB' lab, 'A1RC' recitation).
           The block is named explicitly, so linkage is a lookup and ordering is
           irrelevant. Required here: the component suffixes sort 'A1LB' before
@@ -119,15 +127,22 @@ class NYUProvider(CourseProvider):
           block's lecture, silently and undetectably.
         * **Sequential** (CAS: '001' lecture, '002'-'005' recitations). No block
           is named, so a lecture starts a block and the following non-lectures
-          belong to it. Still an inference; see validate_linkage.py.
+          belong to it. Still an inference; see tests/test_live_data.py.
 
         Stems are used only when *every* section has one, so a course with mixed
         or unrecognized numbering falls back rather than half-applying a scheme.
         """
         stems = {row["crn"]: _block_stem(row.get("no")) for row in usable}
         parents: dict[str, str | None] = {}
+        lectures = [row for row in usable
+                    if KIND_MAP[row["schd"]] == SectionKind.LECTURE]
 
-        if usable and all(stems.values()):
+        if len(lectures) == 1:
+            only = lectures[0]["crn"]
+            for row in usable:
+                if KIND_MAP[row["schd"]] != SectionKind.LECTURE:
+                    parents[row["crn"]] = only
+        elif usable and all(stems.values()):
             lecture_by_stem: dict[str, str] = {}
             for row in usable:
                 if KIND_MAP[row["schd"]] == SectionKind.LECTURE:
