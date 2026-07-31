@@ -408,9 +408,30 @@ their ToS — fine for a personal project, a real question if this ships. That i
 exactly why it lives behind `RatingProvider` in `ratings.py`; swapping in a
 licensed source or `NullRatings` touches nothing else.
 
-- **`schoolID` must be pinned.** Searching "New York University" also returns
-  NYU Wagner and NYU Los Angeles, which are separate schools with separate
-  faculty. `New York University` is `U2Nob29sLTY3NQ==`.
+- **`schoolID` must be pinned, and NYU is more than one school.** Searching
+  "New York University" returns Wagner, Los Angeles, Steinhardt, London,
+  Medicine, Law and Dentistry as separate schools with separate faculty.
+  Two matter: `New York University` = `U2Nob29sLTY3NQ==` (520 ratings) and
+  **`NYU Tandon School of Engineering` = `U2Nob29sLTc3Mg==` (137 ratings)**.
+- **A Tandon professor is absent from the main NYU directory entirely** — not
+  ranked lower, not unrated, simply not returned. Verified: Adam Constantine,
+  Alekzander Malcom and Jinghua Qian all teach `MA-UY` courses, all came back
+  "no name match" against main NYU, and all three are in Tandon with real
+  ratings (4.5, 4.2, 4.2). On a Tandon-heavy course list this took the join
+  from 5 of 11 instructors matched to 8 of 11.
+- **Campus chooses which directory to read first.** `Section.campus` already
+  comes from NYU's own Location filter, so it is evidence rather than a guess:
+  Brooklyn searches Tandon first, Washington Square searches main NYU first,
+  and the other is a fallback (cross-campus teaching is real).
+- **Fall back only on "no name match".** That reason means the person is not in
+  that directory at all. "No ratings yet" and "ambiguous" mean people with that
+  name *were* found there, so reaching into the other school afterwards could
+  only attach a different person's number — the exact failure the strict
+  matching exists to prevent.
+- **The search cache key must include the school.** The same surname returns
+  different faculty in each directory, so a name-only key serves the first
+  school's answer to the second and the fallback silently never happens. Same
+  class of bug as the `camp` filter in `nyu_provider`.
 - **Search by surname, not full name.** The `text` query is a loose search;
   full names return fewer usable hits than the surname plus local filtering.
 - **This is the only inexact join in the project.** Math/CS instructors join on
@@ -481,7 +502,9 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 ### Known gaps
 
 - **Rating coverage is partial and unverifiable.** Ratings now flow from RMP
-  (9 of 10 instructors matched on the example course list), but a professor
+  across both the main NYU and Tandon directories (8 of 11 on a Tandon-heavy
+  course list; the 3 misses are two genuinely unreviewed professors and one
+  genuinely absent from both), but a professor
   absent from RMP, unreviewed, or ambiguous is scored a neutral 0.5 — so the
   factor still fails to discriminate between those schedules. There is also no
   way to confirm a match is the *right* person beyond name + department; the
@@ -514,7 +537,7 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   interchangeable, which `distinct_schedules` now collapses on display. Ties
   that survive collapsing are different weeks scoring equally, which is a
   correct result, not a bug.
-- **Coverage is behavioral, not exhaustive.** 195 offline tests plus 9 live ones
+- **Coverage is behavioral, not exhaustive.** 201 offline tests plus 9 live ones
   cover the scoring factors, duplicate collapsing, both linkage strategies,
   bundling, campus tagging, constraints, and both scrapers. `main.py` itself is
   untested (argparse wiring, prompts, display formatting), and there is no

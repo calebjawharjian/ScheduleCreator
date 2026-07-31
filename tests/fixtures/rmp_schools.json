@@ -1,0 +1,41 @@
+{
+ "main": {
+  "constantine": [
+   {
+    "avgRating": 4.7,
+    "department": "Computer Science",
+    "firstName": "Constantine",
+    "lastName": "Christakos",
+    "numRatings": 6
+   },
+   {
+    "avgRating": 5,
+    "department": "Psychology",
+    "firstName": "Kesia",
+    "lastName": "Constantine",
+    "numRatings": 2
+   }
+  ],
+  "geng": [
+   {
+    "avgRating": 0,
+    "department": "Computer Science",
+    "firstName": " Jinkun ",
+    "lastName": "Geng",
+    "numRatings": 0
+   }
+  ]
+ },
+ "tandon": {
+  "constantine": [
+   {
+    "avgRating": 4.5,
+    "department": "Mathematics",
+    "firstName": "Adam",
+    "lastName": "Constantine",
+    "numRatings": 2
+   }
+  ],
+  "geng": []
+ }
+}

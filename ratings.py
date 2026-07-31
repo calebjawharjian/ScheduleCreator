@@ -14,12 +14,15 @@ attach the wrong number to the right person.
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 import json
 import re
 import time
 from pathlib import Path
 
 import requests
+
+from campuses import BROOKLYN, WASHINGTON_SQUARE
 
 URL = "https://www.ratemyprofessors.com/graphql"
 # The anonymous credential the public site ships in its own client bundle.
@@ -29,10 +32,25 @@ HEADERS = {
     "User-Agent": "ScheduleCreator/0.1 (personal project)",
 }
 
-# 'New York University'. Searching the name also returns NYU Wagner and NYU
-# Los Angeles, which are separate schools with separate faculty, so this is
-# pinned rather than looked up.
+# 'New York University'. Searching the name also returns NYU Wagner, NYU
+# Los Angeles, Steinhardt, London and the Medicine/Law/Dentistry schools, all
+# separate faculties, so these are pinned rather than looked up.
 NYU_SCHOOL_ID = "U2Nob29sLTY3NQ=="
+
+# RMP files Tandon as its own school with its own faculty (137 ratings of its
+# own), and a Tandon professor is simply absent from the main NYU directory.
+# This is not a nicety: Adam Constantine, Alekzander Malcom and Jinghua Qian
+# all teach MA-UY courses, all returned "no name match" against main NYU, and
+# all three sit in Tandon with real ratings (4.5, 4.2, 4.2).
+TANDON_SCHOOL_ID = "U2Nob29sLTc3Mg=="
+
+# Which directory to search first. Campus is per-section and comes from NYU's
+# own Location filter, so it is real evidence about which faculty a professor
+# belongs to -- not a guess.
+CAMPUS_SCHOOLS = {
+    WASHINGTON_SQUARE: NYU_SCHOOL_ID,
+    BROOKLYN: TANDON_SCHOOL_ID,
+}
 
 TEACHER_QUERY = """
 query($text: String!, $school: ID!) {
@@ -57,7 +75,27 @@ SUBJECT_DEPARTMENTS = {
     "MATH-GA": "Mathematics",
     "CSCI-UA": "Computer Science",
     "CSCI-GA": "Computer Science",
+    # Tandon equivalents. 'Mathematics' for MA-UY is confirmed -- it is the
+    # department RMP lists for Constantine, Malcom and Qian. The rest are
+    # reasonable guesses, which is safe: a hint that matches nothing simply
+    # fails to narrow, leaving the match ambiguous and therefore refused.
+    "MA-UY": "Mathematics",
+    "CS-UY": "Computer Science",
+    "ECE-UY": "Electrical Engineering",
+    "PHYS-UA": "Physics",
 }
+
+
+@dataclass(frozen=True)
+class InstructorHint:
+    """What we know about an instructor beyond their name.
+
+    Both fields only ever *narrow* a search. `department` breaks ties between
+    people sharing a name; `campus` decides which NYU faculty directory to
+    read first. Neither can invent a match.
+    """
+    department: str | None = None
+    campus: str | None = None
 
 
 def shrink(average: float, count: int,
@@ -95,8 +133,8 @@ class RatingProvider(ABC):
     """A source of instructor ratings on a 0-5 scale."""
 
     @abstractmethod
-    def ratings_for(self, wanted: dict[str, str | None]) -> dict[str, float]:
-        """Map {instructor name -> department hint} to {name -> 0..5 rating}.
+    def ratings_for(self, wanted: dict[str, InstructorHint]) -> dict[str, float]:
+        """Map {instructor name -> hint} to {name -> 0..5 rating}.
 
         Names that cannot be matched confidently are simply absent from the
         result, which `_score_professor` already treats as neutral.
@@ -107,7 +145,7 @@ class RatingProvider(ABC):
 class NullRatings(RatingProvider):
     """No ratings at all. The offline/default behavior."""
 
-    def ratings_for(self, wanted: dict[str, str | None]) -> dict[str, float]:
+    def ratings_for(self, wanted: dict[str, InstructorHint]) -> dict[str, float]:
         return {}
 
 
@@ -130,9 +168,16 @@ class RMPRatings(RatingProvider):
 
     # --- network ---------------------------------------------------------
 
-    def _search(self, text: str) -> list[dict]:
-        """Candidate teachers for a search string, cached across runs."""
-        key = _norm(text)
+    def _search(self, text: str, school: str | None = None) -> list[dict]:
+        """Candidate teachers for a search string, cached across runs.
+
+        The cache key includes the school. It has to: the same surname returns
+        different faculty in the main NYU directory and in Tandon's, so a
+        name-only key would serve the first school's answer for the second and
+        the fallback would silently never happen.
+        """
+        school = school or self._school_id
+        key = f"{_norm(text)}|{school}"
         if key in self._cache:
             return self._cache[key]
 
@@ -141,7 +186,7 @@ class RMPRatings(RatingProvider):
         response = requests.post(
             URL, headers=HEADERS, timeout=30,
             json={"query": TEACHER_QUERY,
-                  "variables": {"text": text, "school": self._school_id}},
+                  "variables": {"text": text, "school": school}},
         )
         response.raise_for_status()
         payload = response.json()
@@ -196,21 +241,41 @@ class RMPRatings(RatingProvider):
 
     # --- interface -------------------------------------------------------
 
-    def ratings_for(self, wanted: dict[str, str | None]) -> dict[str, float]:
+    def _schools_for(self, campus: str | None) -> list[str]:
+        """Directories to try, in order. Campus decides which comes first."""
+        primary = CAMPUS_SCHOOLS.get(campus or "", self._school_id)
+        rest = [s for s in (NYU_SCHOOL_ID, TANDON_SCHOOL_ID) if s != primary]
+        return [primary, *rest]
+
+    def ratings_for(self, wanted: dict[str, InstructorHint]) -> dict[str, float]:
         ratings: dict[str, float] = {}
         for name, hint in sorted(wanted.items()):
             if not name:
                 continue
-            try:
-                candidates = self._search(_first_last(name)[1] or name)
-            except requests.RequestException as exc:
-                if self._verbose:
-                    print(f"warning: rating lookup failed for {name}: {exc}")
-                continue
+            surname = _first_last(name)[1] or name
+            match, reason = None, "no name match"
 
-            match, reason = self._match(name, hint, candidates)
+            for school in self._schools_for(hint.campus):
+                try:
+                    candidates = self._search(surname, school)
+                except requests.RequestException as exc:
+                    if self._verbose:
+                        print(f"warning: rating lookup failed for {name}: {exc}")
+                    reason = None      # already reported; do not warn twice
+                    break
+
+                match, reason = self._match(name, hint.department, candidates)
+                if match is not None:
+                    break
+                # Only "not in this directory at all" justifies looking in the
+                # other one. "no ratings yet" and "ambiguous" mean we DID find
+                # people with this name here, and reaching into another school
+                # after that would be matching a different person entirely.
+                if reason != "no name match":
+                    break
+
             if match is None:
-                if self._verbose:
+                if self._verbose and reason:
                     print(f"warning: no rating for {name} ({reason})")
                 continue
 

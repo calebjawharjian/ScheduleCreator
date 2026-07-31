@@ -277,13 +277,17 @@ print()
 # finished {name -> rating} dict and never touches the network itself.
 professor_ratings: dict[str, float] = {}
 if not args.no_ratings:
-    from ratings import RMPRatings, department_hint
+    from ratings import RMPRatings, InstructorHint, department_hint
 
-    wanted = {}
+    # Campus travels with the hint because RMP files Tandon as a separate
+    # school: a Brooklyn professor is absent from the main NYU directory
+    # entirely, so searching the right one first is what makes the join land.
+    wanted: dict[str, InstructorHint] = {}
     for course in courses:
         for s in course.sections:
             if s.instructor:
-                wanted.setdefault(s.instructor, department_hint(s.course_code))
+                wanted.setdefault(s.instructor, InstructorHint(
+                    department=department_hint(s.course_code), campus=s.campus))
     if wanted:
         print(f"Looking up {len(wanted)} instructors on RateMyProfessor...")
         professor_ratings = RMPRatings().ratings_for(wanted)
