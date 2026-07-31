@@ -1,0 +1,19 @@
+# Render Blueprint for the API. Deploys as a free web service; import this
+# repo at dashboard.render.com/blueprints and Render reads this file directly.
+#
+# SCHEDULER_ALLOWED_ORIGINS is left for manual entry (sync: false) because its
+# correct value -- the frontend's deployed URL -- doesn't exist until the
+# Vercel deploy has already happened. Chicken-and-egg, so it's a one-time
+# dashboard step rather than something this file can know in advance.
+services:
+  - type: web
+    name: schedulecreator-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: SCHEDULER_ALLOWED_ORIGINS
+        sync: false
