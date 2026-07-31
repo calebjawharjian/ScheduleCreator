@@ -69,7 +69,7 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `campuses.py` | NYU campus constants + the Location filter codes the provider queries |
 | `constraints.py` | `Constraint` interface + `RequiredInstructor` + `CommuteBuffer`; hard filters applied before scoring |
 | `ratings.py` | `RatingProvider` interface + `RMPRatings` (RateMyProfessor) + `NullRatings` |
-| `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules` |
+| `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules`, `distinct_schedules` |
 | `main.py` | CLI entry point: argparse flags, interactive prompts when run bare, result display |
 | `tests/` | pytest suite. Offline by default; `tests/fixtures/` holds recorded responses |
 | `tests/test_live_data.py` | **Keep.** Live guards for linkage + both joins; `pytest -m live` |
@@ -112,6 +112,20 @@ independent concerns. Swapping the data source touches nothing downstream.
   come *closest*, ranked by `Constraint.penalty` (minutes short), and names the
   compromise rather than hiding it. Silently dropping either would be worse
   than both failing loudly and returning a flawed-but-labeled answer.
+- **Rank concrete schedules, but display distinct *weeks*.** A schedule is a
+  set of CRNs; what a student chooses between is a set of times. NYU's catalog
+  makes those wildly different quantities — 25 of EG-UY 1004's lecture sections
+  meet at the identical hour with no published instructor, so they are
+  interchangeable by construction. Ranking them separately is correct and must
+  stay that way (they really are different registrations), but *showing* them
+  separately fills the top ten with one answer. `distinct_schedules` collapses
+  on `schedule_shape` at the display boundary only, keeping the deterministic
+  core untouched. **The shape must contain every field `score_schedule` reads**
+  — meetings and lecture instructors — or collapsing would merge schedules with
+  different scores and hide the better one behind whichever the cartesian
+  product happened to emit first. Campus and non-lecture instructors are in the
+  shape too: scoring ignores them, but adding a field can only split a group,
+  never wrongly merge one, so over-including is the safe direction.
 
 ---
 
@@ -408,24 +422,36 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   `anthropic` is installed and `ANTHROPIC_API_KEY` handling is documented, but
   nothing calls it. All current output (`main.py`'s "strongest"/"biggest
   tradeoff" lines) is deterministic string formatting.
-- **Score ties are much rarer but not gone.** With six scoring factors instead
-  of three, the top-10 spread for the example course list is 0.67–0.74 rather
-  than a flat tie at 0.71. The exact ties that remain are schedules differing
-  only in which recitation slot they picked, where those slots happen to have
-  identical day/time — a correct result, not a bug.
-- **Coverage is behavioral, not exhaustive.** 70 offline tests plus 7 live ones
-  cover the scoring factors, both linkage strategies, bundling, and both
-  scrapers. `main.py` itself is untested (argparse wiring, prompts, display
-  formatting), and there is no coverage measurement.
+- **Score ties are real, and they are mostly the catalog's fault.** With six
+  factors the top-10 spread for the three-course example is 0.67–0.74. On a
+  four-course list, though, 78 schedules tied at the top score and covered only
+  3 distinct weeks — the ties are near-entirely sections that are genuinely
+  interchangeable, which `distinct_schedules` now collapses on display. Ties
+  that survive collapsing are different weeks scoring equally, which is a
+  correct result, not a bug.
+- **Coverage is behavioral, not exhaustive.** 151 offline tests plus 9 live ones
+  cover the scoring factors, duplicate collapsing, both linkage strategies,
+  bundling, campus tagging, constraints, and both scrapers. `main.py` itself is
+  untested (argparse wiring, prompts, display formatting), and there is no
+  coverage measurement.
 - **Sections with no meeting times** (online/TBA) cannot conflict with anything and
   contribute nothing to day/time factors, which can inflate their schedules' scores.
 - **Course-wide recitations** (`parent_section_id = None`, pairing with any lecture)
   are not handled.
-- **Schedule counts explode with large-enrollment courses.** EXPOS-UA 1 alone has
-  86 sections, so a four-course list produces ~115k schedules and the top 10 are
-  near-duplicates differing only in which of the interchangeable sections was
-  picked. Ranking still works, but the output is repetitive; some form of
-  de-duplication or diversity in the top-N is worth doing before the UI lands.
+- **Schedule counts still explode; the top-N no longer shows it.** EXPOS-UA 1
+  alone has 86 sections, so `["CSCI-UA 102", "MATH-UA 121", "EXPOS-UA 1",
+  "EG-UY 1004"]` produces 120,119 schedules. `distinct_schedules` fixes the
+  *display* (see the design principle), but generation and scoring still walk
+  every combination, so runtime and memory scale with the raw count, not the
+  462 weeks that survive collapsing.
+- **Collapsing does not surface genuinely different tradeoffs.** It removes
+  duplicates, not sameness. For the course list above with Bari required, all
+  ten displayed weeks are still 5-day weeks differing by one recitation slot,
+  because ranking is honest: `days_on_campus` carries 1 of 9 total weight, so
+  the best **4-day** week sits at rank 583 (0.624) and the best **3-day** week
+  at rank 1984 (0.575), against 0.668 at the top. Both exist and neither is
+  reachable by scrolling a top-10. Reserving top-N slots for schedules that are
+  *different* rather than merely next-best is the open half of this problem.
 
 ---
 
@@ -434,8 +460,12 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 1. **Build `narrator.py`**, the LLM explanation layer described above — it doesn't
    exist yet (see Known gaps). This has to land before lazy/cached narration (next
    item) makes sense, since that step presupposes narration already exists.
-2. **Top-N diversity.** With a realistic course load the top ten are near-identical
-   (see Known gaps). Collapse or spread them so the list shows real alternatives.
+2. **Top-N diversity.** De-duplication is done (`distinct_schedules`); spreading
+   is not. The ten distinct weeks shown are still ten variations on one shape,
+   while the best 3-day and 4-day weeks sit hundreds of rows down (see Known
+   gaps). Reserve slots for schedules that differ *structurally* — fewest days,
+   latest start, best professor — so the list shows real alternatives rather
+   than the same tradeoff ten times.
 3. **FastAPI route layer** over the existing logic.
 4. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
    bars, expandable AI explanation.
@@ -458,6 +488,15 @@ MATH-UA sections. Plus `best_effort`, which returns the closest-fitting
 schedules (with the compromise named) when travel time cannot be satisfied,
 instead of returning nothing. The "best fit" wording it produces is written to
 be picked up by `narrator.py` later.
+
+Most recently, `distinct_schedules`. A four-course run returned a top ten that
+was **literally one week printed ten times**: 8538 schedules collapsed to 462
+distinct weeks, and 78 tied at the top score across just 3 shapes. The
+three-course example in this doc has *zero* redundancy (1327 → 1327), which is
+exactly why the problem hid for so long — the documented example structurally
+could not show it. Fixed at the display boundary rather than in ranking, so the
+core stays deterministic and every real registration option is still
+enumerated.
 
 ## Resume framing
 

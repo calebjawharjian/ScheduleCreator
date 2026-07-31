@@ -168,6 +168,68 @@ def rank_schedules(
     scored.sort(key=lambda pair: pair[1].total, reverse=True)
     return scored
 
+
+@dataclass
+class DistinctSchedule:
+    schedule: list[Section]     # one concrete pick of section numbers
+    breakdown: ScoreBreakdown
+    variants: int               # section combinations producing this same week
+
+
+def schedule_shape(schedule: list[Section]) -> tuple:
+    """What a student actually experiences, ignoring which CRN delivers it.
+
+    NYU's catalog is full of sections that differ only by identifier: 25 of
+    EG-UY 1004's lecture sections meet Mon 12:30-13:50, and EXPOS-UA 1's 86
+    sections occupy 14 distinct time slots. Nothing distinguishes them to a
+    student choosing a week, so they multiply the result set without adding
+    an option -- 8538 ranked schedules for one real course list collapse to
+    462 genuinely different weeks.
+
+    The signature must include *everything score_schedule reads*, or
+    collapsing would merge schedules with different scores and silently hide
+    the better one. That means meetings (days, times) and lecture instructors.
+    Campus and non-lecture instructors are included too: scoring ignores them,
+    but a Brooklyn lab is not interchangeable with a Manhattan one at the same
+    hour, and including a field can only split groups, never wrongly merge.
+    """
+    return tuple(sorted(
+        (section.course_code, section.kind, section.instructor or "",
+         section.campus or "",
+         tuple(sorted((m.day, m.start, m.end) for m in section.meetings)))
+        for section in schedule
+    ))
+
+
+def distinct_schedules(
+    ranked: list[tuple[list[Section], ScoreBreakdown]],
+    limit: int | None = None,
+) -> list[DistinctSchedule]:
+    """Collapse ranked results to one entry per genuinely different week.
+
+    The first schedule of each shape is kept as the representative, so within
+    a group the highest-ranked concrete section pick is the one shown.
+    Duplicates are counted rather than dropped, because "and 24 other section
+    combinations meet at these same times" is real information: it tells the
+    student their pick is not scarce.
+
+    The whole list is scanned even when `limit` is set. Stopping early would
+    be faster but would undercount the variants of the entries it did return,
+    and a wrong count is worse than a slower one.
+    """
+    groups: dict[tuple, DistinctSchedule] = {}
+    order: list[DistinctSchedule] = []
+    for schedule, breakdown in ranked:
+        shape = schedule_shape(schedule)
+        existing = groups.get(shape)
+        if existing is not None:
+            existing.variants += 1
+            continue
+        entry = DistinctSchedule(schedule=schedule, breakdown=breakdown, variants=1)
+        groups[shape] = entry
+        order.append(entry)
+    return order if limit is None else order[:limit]
+
 def compare_to_ideal(breakdown: ScoreBreakdown, prefs: Preferences) -> IdealComparison:
     weight_total = sum(prefs.weights.get(name, 0.0) for name in breakdown.factors)
 

@@ -3,7 +3,7 @@ import sys
 from models import Day, hhmm
 from scheduler import generate_schedules
 from scoring import (
-    Preferences, rank_schedules, compare_to_ideal,
+    Preferences, rank_schedules, compare_to_ideal, distinct_schedules,
     DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
 )
 
@@ -340,19 +340,35 @@ prefs = Preferences(
 )
 
 TOP_N = 10
-for rank, (sched, breakdown) in enumerate(rank_schedules(schedules, prefs)[:TOP_N], 1):
-    comparison = compare_to_ideal(breakdown, prefs)
+
+# Ranked results are collapsed to distinct weeks before display. NYU's catalog
+# contains many sections that differ only by CRN -- same day, same time, same
+# (usually unpublished) instructor -- so an uncollapsed top ten is routinely the
+# same schedule printed ten times while genuinely different options sit hundreds
+# of rows below it.
+ranked = rank_schedules(schedules, prefs)
+distinct = distinct_schedules(ranked)
+if len(distinct) < len(ranked):
+    print(f"{len(distinct)} distinct weeks (the rest differ only in which "
+          f"interchangeable section was picked)\n")
+
+for rank, option in enumerate(distinct[:TOP_N], 1):
+    comparison = compare_to_ideal(option.breakdown, prefs)
     best = comparison.strengths[0]
     worst = comparison.weaknesses[0]
 
     print(f"#{rank}  score {comparison.total:.2f}  (gap from ideal {comparison.total_gap:.2f})")
-    for s in sorted(sched, key=lambda s: (s.course_code, s.kind)):
+    for s in sorted(option.schedule, key=lambda s: (s.course_code, s.kind)):
         who = s.instructor or "(no instructor listed)"
         rating = professor_ratings.get(s.instructor)
         if rating is not None:
             who = f"{who} ({rating:.1f}/5)"
         print(f"      {s.course_code:<14} {s.section_id:<8} {s.kind.name:<10} "
               f"{format_meetings(s.meetings):<34} {who}")
+    if option.variants > 1:
+        others = option.variants - 1
+        print(f"      ({others} other section combination"
+              f"{'s' if others > 1 else ''} meet at these same times)")
     print(f"      strongest: {FACTOR_LABELS[best.name]} at {best.score:.2f}")
     print(f"      biggest tradeoff: {FACTOR_LABELS[worst.name]} "
           f"costs {worst.weighted_gap:.2f} of the total")

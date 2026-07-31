@@ -3,6 +3,7 @@ import pytest
 from models import Day, Meeting, Section, SectionKind, hhmm
 from scoring import (
     Preferences, score_schedule, rank_schedules, compare_to_ideal,
+    distinct_schedules, schedule_shape,
     DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
     _score_days, _score_time, _score_professor,
     _score_days_on_campus, _score_idle_time, _score_late_start,
@@ -191,3 +192,116 @@ def test_compare_to_ideal_ranks_strengths_and_weaknesses_differently():
     assert comparison.weaknesses[0].weighted_gap >= comparison.weaknesses[-1].weighted_gap
     # DAYS carries ten-fifteenths of the weight and scores 0, so it must lead.
     assert comparison.weaknesses[0].name == DAYS
+
+
+# --- collapsing duplicate weeks ----------------------------------------------
+#
+# NYU's catalog is full of sections that differ only by CRN: 25 of EG-UY 1004's
+# lecture sections meet Mon 12:30-13:50, and EXPOS-UA 1's 86 sections occupy 14
+# time slots. Uncollapsed, a realistic course list produced a top ten that was
+# one week printed ten times, while the best 3-day week sat at rank 1984.
+
+def sec(section_id, course="X 1", kind=SectionKind.LECTURE, instructor=None,
+        meetings=(), campus=None):
+    return Section(section_id, course, kind, instructor, list(meetings),
+                   campus=campus)
+
+
+def collapse(schedules, p=None):
+    return distinct_schedules(rank_schedules(schedules, p or prefs()))
+
+
+def test_sections_differing_only_by_id_collapse_into_one_week():
+    """The core case: same course, same slot, different CRN. A student cannot
+    tell these apart, so they are one option, not three."""
+    slot = [m(Day.MON, "13:00", "14:00")]
+    weeks = collapse([[sec("A", meetings=slot)],
+                      [sec("B", meetings=slot)],
+                      [sec("C", meetings=slot)]])
+    assert len(weeks) == 1
+    assert weeks[0].variants == 3
+
+
+def test_different_meeting_times_stay_separate():
+    weeks = collapse([[sec("A", meetings=[m(Day.MON, "13:00", "14:00")])],
+                      [sec("B", meetings=[m(Day.TUE, "13:00", "14:00")])]])
+    assert len(weeks) == 2
+    assert all(w.variants == 1 for w in weeks)
+
+
+def test_different_lecture_instructors_never_collapse():
+    """The safety property. Instructor feeds _score_professor, so merging two
+    schedules that differ only by professor would hide the better-rated one
+    behind whichever the enumeration happened to reach first."""
+    slot = [m(Day.MON, "13:00", "14:00")]
+    p = prefs(professor_ratings={"Ada": 5.0, "Grace": 1.0})
+    weeks = collapse([[sec("A", instructor="Ada", meetings=slot)],
+                      [sec("B", instructor="Grace", meetings=slot)]], p)
+    assert len(weeks) == 2
+    assert weeks[0].schedule[0].instructor == "Ada"      # better rating first
+
+
+def test_different_campuses_never_collapse():
+    """Scoring ignores campus, but a Brooklyn lab is not interchangeable with a
+    Manhattan one at the same hour."""
+    slot = [m(Day.MON, "13:00", "14:00")]
+    weeks = collapse([[sec("A", meetings=slot, campus="Washington Square")],
+                      [sec("B", meetings=slot, campus="Brooklyn (Tandon)")]])
+    assert len(weeks) == 2
+
+
+def test_collapsed_schedules_all_share_the_representative_score():
+    """The invariant that makes collapsing safe at all: anything merged scores
+    identically, so nothing better is ever discarded."""
+    slot = [m(Day.MON, "13:00", "14:00")]
+    other = [m(Day.WED, "09:00", "10:00")]
+    schedules = [[sec(str(i), meetings=slot)] for i in range(4)]
+    schedules += [[sec("z", meetings=other)]]
+    p = prefs()
+
+    for week in collapse(schedules, p):
+        same_shape = [s for s in schedules
+                      if schedule_shape(s) == schedule_shape(week.schedule)]
+        assert len(same_shape) == week.variants
+        for s in same_shape:
+            assert score_schedule(s, p).total == week.breakdown.total
+
+
+def test_the_representative_is_the_highest_ranked_of_its_group():
+    slot = [m(Day.MON, "13:00", "14:00")]
+    weeks = collapse([[sec("late", meetings=[m(Day.SAT, "08:00", "09:00")])],
+                      [sec("A", meetings=slot)],
+                      [sec("B", meetings=slot)]])
+    assert weeks[0].schedule[0].section_id == "A"   # outranks the Saturday week
+
+
+def test_distinct_order_stays_descending_by_score():
+    weeks = collapse([[sec("bad", meetings=[m(Day.SAT, "08:00", "09:00")])],
+                      [sec("good", meetings=[m(Day.MON, "13:00", "14:00")])]])
+    assert [w.breakdown.total for w in weeks] == sorted(
+        [w.breakdown.total for w in weeks], reverse=True)
+
+
+def test_limit_truncates_but_variant_counts_stay_accurate():
+    """Counting has to scan everything. Stopping at the limit would be faster
+    and would undercount, and a wrong count is worse than a slow one."""
+    slot = [m(Day.MON, "13:00", "14:00")]
+    ranked = rank_schedules(
+        [[sec("A", meetings=slot)], [sec("B", meetings=slot)],
+         [sec("C", meetings=slot)],
+         [sec("z", meetings=[m(Day.SAT, "08:00", "09:00")])]], prefs())
+    weeks = distinct_schedules(ranked, limit=1)
+    assert len(weeks) == 1
+    assert weeks[0].variants == 3
+
+
+def test_section_order_within_a_schedule_does_not_matter():
+    """Bundles arrive in whatever order the cartesian product produced; the
+    same week listed lecture-first or lab-first is still the same week."""
+    lec = sec("L", meetings=[m(Day.MON, "13:00", "14:00")])
+    lab = sec("B", kind=SectionKind.LAB, meetings=[m(Day.WED, "09:00", "11:00")])
+    assert schedule_shape([lec, lab]) == schedule_shape([lab, lec])
+
+
+def test_empty_input_collapses_to_nothing():
+    assert distinct_schedules([]) == []
