@@ -1,4 +1,5 @@
 import argparse
+import sys
 from models import Day, hhmm
 from scheduler import generate_schedules
 from scoring import (
@@ -49,11 +50,96 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _ask(question: str, default_display: str, parse, default_value):
+    """Prompt until the answer parses. A blank line accepts the default.
+
+    Reuses the same parse functions as the flags, so both input paths
+    validate identically instead of drifting apart.
+    """
+    while True:
+        try:
+            raw = input(f"{question}\n  [{default_display}]: ").strip()
+        except EOFError:
+            print()
+            return default_value
+        if not raw:
+            return default_value
+        try:
+            return parse(raw)
+        except (argparse.ArgumentTypeError, ValueError, KeyError) as exc:
+            print(f"  {exc}")
+
+
+def _parse_courses(raw: str) -> list[str]:
+    # Comma-separated here rather than space-separated: course codes contain
+    # a space ('CSCI-UA 101') but never a comma, so this stays unambiguous.
+    codes = [c.strip() for c in raw.split(",") if c.strip()]
+    if not codes:
+        raise ValueError("enter at least one course code")
+    return codes
+
+
+def _parse_days(raw: str) -> list[str]:
+    names = [d.strip().upper() for d in raw.replace(",", " ").split() if d.strip()]
+    valid = {d.name for d in Day}
+    unknown = [n for n in names if n not in valid]
+    if unknown:
+        raise ValueError(f"unknown day(s) {unknown}; choose from {sorted(valid)}")
+    if not names:
+        raise ValueError("enter at least one day")
+    return names
+
+
+def _parse_term(raw: str) -> str:
+    key = raw.strip().lower()
+    if key not in TERM_CODES:
+        raise ValueError(f"unknown term {raw!r}; choose from {sorted(TERM_CODES)}")
+    return key
+
+
+def prompt_for_preferences():
+    """Interactive fallback when the program is run with no flags."""
+    print("Schedule preferences (press Enter to accept each default).\n")
+
+    course_codes = _ask("Course codes, comma-separated",
+                        ", ".join(DEFAULT_COURSE_CODES),
+                        _parse_courses, DEFAULT_COURSE_CODES)
+    term_name = _ask("Term", "fall2026", _parse_term, "fall2026")
+    days = _ask("Preferred days", "MON WED", _parse_days, ["MON", "WED"])
+    time_start = _ask("Earliest acceptable start time (HH:MM)", "12:00",
+                      _time, hhmm("12:00"))
+    time_end = _ask("Latest acceptable end time (HH:MM)", "18:00",
+                    _time, hhmm("18:00"))
+
+    weights = dict(DEFAULT_WEIGHTS)
+    answer = _ask("Customize factor weights? (y/N)", "N",
+                  lambda s: s.strip().lower(), "n")
+    if answer.startswith("y"):
+        print("\n  Higher weight = matters more. Relative, so they need not sum to 1.")
+        for name in DEFAULT_WEIGHTS:
+            weights[name] = _ask(f"  Weight for {FACTOR_LABELS[name]}",
+                                 str(DEFAULT_WEIGHTS[name]),
+                                 float, DEFAULT_WEIGHTS[name])
+    print()
+    return course_codes, term_name, days, time_start, time_end, weights
+
+
 args = parse_args()
-course_codes = args.course_codes or DEFAULT_COURSE_CODES
-term = TERM_CODES[args.term]
-preferred_days = {Day[name] for name in args.days}
-weights = {**DEFAULT_WEIGHTS, **dict(args.weights or [])}
+
+# No flags at all means an interactive run; any flag means scripted, where
+# unspecified values fall back to the same defaults as before.
+if len(sys.argv) == 1:
+    course_codes, term_name, day_names, time_start, time_end, weights = \
+        prompt_for_preferences()
+else:
+    course_codes = args.course_codes or DEFAULT_COURSE_CODES
+    term_name = args.term
+    day_names = args.days
+    time_start, time_end = args.time_start, args.time_end
+    weights = {**DEFAULT_WEIGHTS, **dict(args.weights or [])}
+
+term = TERM_CODES[term_name]
+preferred_days = {Day[name] for name in day_names}
 
 if USE_LIVE_DATA:
     from nyu_provider import NYUProvider
@@ -91,8 +177,8 @@ if not schedules:
 
 prefs = Preferences(
     preferred_days=preferred_days,
-    time_start=args.time_start,
-    time_end=args.time_end,
+    time_start=time_start,
+    time_end=time_end,
     # Placeholder. Real NYU instructor names won't match these, so the
     # professor factor will score a neutral 0.5 until we wire up real ratings.
     professor_ratings={},
