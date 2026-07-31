@@ -36,7 +36,11 @@ This project is a learning exercise as much as a deliverable. When helping:
 - System Python is PEP 668 protected (`externally-managed-environment`). Never use
   `--break-system-packages`; fix the venv instead. A broken venv gets rebuilt:
   `rm -rf venv && python3 -m venv venv && source venv/bin/activate`.
-- Dependencies: `requests`, `beautifulsoup4`, `anthropic`, `python-dotenv`, `pytest`.
+- Dependencies: `requests`, `beautifulsoup4`, `anthropic`, `python-dotenv`,
+  `fastapi`, `uvicorn[standard]`, `pytest`.
+- **Run the API:** `./venv/bin/python -m uvicorn api:app --reload`. Docs at
+  `/docs`. The CLI still works and is the quickest way to sanity-check a
+  change end to end.
 - **Tests:** `./venv/bin/python -m pytest` runs the offline suite (no network,
   ~1.5s). `pytest -m live` runs the checks that hit NYU's real endpoints. An
   autouse fixture makes any unmarked test that reaches the network fail, so the
@@ -73,7 +77,8 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `ratings.py` | `RatingProvider` interface + `RMPRatings` (RateMyProfessor) + `NullRatings` |
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules`, `distinct_schedules`, `diverse_top` |
 | `narrator.py` | `Narrator` interface + `build_findings` + `TemplateNarrator` (deterministic) + `OpenAICompatNarrator` + `ClaudeNarrator` |
-| `main.py` | CLI entry point: argparse flags, interactive prompts when run bare, result display |
+| `api.py` | FastAPI layer: `/generate` (expensive, cached) + `/rank` (interactive) + `/factors` |
+| `main.py` | CLI entry point. Scaffolding that predates the web UI; delete once the frontend covers it |
 | `tests/` | pytest suite. Offline by default; `tests/fixtures/` holds recorded responses |
 | `tests/test_live_data.py` | **Keep.** Live guards for linkage + both joins; `pytest -m live` |
 
@@ -568,15 +573,11 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 
 ## Next steps
 
-1. **FastAPI route layer** over the existing logic. Shape it around the
-   measured cost split, not as one endpoint: courses + term drive generation
-   (~7s of combinatorics plus a cacheable network fetch), required professors
-   and commute buffer drive filtering (~2.6s), while preferred days, time
-   window and all six weights drive **only** ranking — 0.44s for 8,538
-   schedules. Generate once and re-rank many times, or every weight slider
-   costs 13 seconds instead of half of one.
-2. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
-   bars, expandable AI explanation.
+1. **React + TypeScript frontend**: weight sliders, a weekly calendar grid,
+   per-factor score bars, expandable AI explanation. The API is in place and
+   measured (see below), so this is the remaining product work.
+2. **Retire `main.py`** once the frontend covers what it does. It is
+   scaffolding from before there was anywhere else to put output.
 3. Lazy + cached narration (generate on expand, remember the result) rather than
    narrating the whole ranked list. The per-schedule call shape already fits
    this; it needs a cache keyed on `schedule_shape`, not a restructure.
@@ -606,6 +607,21 @@ exactly why the problem hid for so long — the documented example structurally
 could not show it. Fixed at the display boundary rather than in ranking, so the
 core stays deterministic and every real registration option is still
 enumerated.
+
+Then `api.py`, shaped by measurement rather than convention. Two endpoints,
+because the costs are asymmetric: `/generate` (term + courses) is the
+expensive combinatorial pass and is cached by course list, while `/rank`
+(days, time window, weights) is the interactive one. The filtered set is
+cached separately again, keyed on the constraints, because constraints change
+on a click and preferences change on a drag. **Measured against live Fall 2026
+data: cold generate 18.7s, cached generate 0.00s, and a weight-slider re-rank
+0.14s over 120,119 schedules.** A single endpoint doing all three would have
+made every slider drag a ~19-second request.
+
+A correction to an earlier figure recorded here: the first profile ran under
+`tracemalloc`, which inflates allocation-heavy code. Filtering is ~0.7s, not
+the 2.6s originally noted. The shape of the split was right; the magnitudes
+were overstated.
 
 Then `diverse_top`, the other half of that problem. Collapsing removed
 duplicates but not sameness: all ten displayed weeks were still five-day weeks
