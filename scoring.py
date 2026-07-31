@@ -230,6 +230,83 @@ def distinct_schedules(
         order.append(entry)
     return order if limit is None else order[:limit]
 
+
+# A reserved slot has to buy something. Below this gain the "alternative"
+# scores essentially the same on its own factor as what is already on screen,
+# so it would cost a row and show the student nothing new.
+MIN_DIVERSITY_GAIN = 0.05
+
+
+@dataclass
+class Alternative:
+    option: DistinctSchedule
+    reason: str            # why this row exists, shown to the user
+    factor: str | None     # the factor that earned the slot; None if by rank
+
+
+def diverse_top(weeks: list[DistinctSchedule], limit: int = 10,
+                min_gain: float = MIN_DIVERSITY_GAIN) -> list[Alternative]:
+    """The best schedule, plus the alternatives it beat, plus the next best.
+
+    Collapsing duplicates was not enough. Ranking is honest, and honest
+    ranking with six factors produces a top ten that is ten variations on one
+    trade-off: for a real four-course list every displayed week was a five-day
+    week differing by one recitation, while the best four-day week sat at rank
+    583 and the best three-day week at rank 1984. Both existed. Neither was
+    reachable by scrolling.
+
+    So slots are reserved for schedules that are *different* rather than
+    merely next-best, and the axes are the scoring factors themselves. That is
+    the reason to prefer this over a generic similarity metric: a slot picked
+    for being 0.3 dissimilar cannot explain itself, whereas "fewest days on
+    campus" is both the selection rule and the label.
+
+    Two rules keep the list honest. A candidate must beat everything already
+    shown on its own factor by `min_gain`, so a slot is never spent on an
+    alternative that is not actually an alternative. And picks are greedy by
+    largest gain, so the most different option comes first and a schedule that
+    happens to lead on two factors cannot take two rows.
+
+    `weeks` must be in rank order, as `distinct_schedules` returns it.
+    """
+    if not weeks:
+        return []
+
+    chosen = [Alternative(weeks[0], "best overall", None)]
+    taken = {id(weeks[0])}
+
+    while len(chosen) < limit:
+        best_gain, best_pick, best_factor = min_gain, None, None
+        for factor in FACTOR_LABELS:
+            covered = max(a.option.breakdown.factors[factor] for a in chosen)
+            for week in weeks:
+                if id(week) in taken:
+                    continue
+                gain = week.breakdown.factors[factor] - covered
+                # Ties on the factor go to the better overall schedule.
+                if gain > best_gain or (
+                    best_pick is not None and gain == best_gain
+                    and factor == best_factor
+                    and week.breakdown.total > best_pick.breakdown.total
+                ):
+                    best_gain, best_pick, best_factor = gain, week, factor
+        if best_pick is None:
+            break
+        chosen.append(Alternative(
+            best_pick, f"best for {FACTOR_LABELS[best_factor]}", best_factor))
+        taken.add(id(best_pick))
+
+    # Whatever slots are left go to the next-best by score, so a short or
+    # homogeneous result set still fills the page.
+    for week in weeks:
+        if len(chosen) >= limit:
+            break
+        if id(week) not in taken:
+            chosen.append(Alternative(week, "next best", None))
+            taken.add(id(week))
+
+    return chosen[:limit]
+
 def compare_to_ideal(breakdown: ScoreBreakdown, prefs: Preferences) -> IdealComparison:
     weight_total = sum(prefs.weights.get(name, 0.0) for name in breakdown.factors)
 

@@ -7,6 +7,7 @@ from narrator import (build_findings, load_env, narrator_from_env,
 from scheduler import generate_schedules
 from scoring import (
     Preferences, rank_schedules, compare_to_ideal, distinct_schedules,
+    diverse_top,
     DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
 )
 
@@ -383,10 +384,17 @@ else:
                                        f"using deterministic summaries\n"))
         print(f"Narrating the top {min(args.narrate, TOP_N)} with {backend}.\n")
 
-for rank, option in enumerate(distinct[:TOP_N], 1):
+# Ranking is honest, which is exactly why the top ten by score is ten
+# variations on one trade-off. Slots are reserved for weeks that are
+# structurally different, each labelled with the axis that earned it.
+alternatives = diverse_top(distinct, limit=TOP_N)
+
+for rank, alternative in enumerate(alternatives, 1):
+    option = alternative.option
     comparison = compare_to_ideal(option.breakdown, prefs)
 
-    print(f"#{rank}  score {comparison.total:.2f}  (gap from ideal {comparison.total_gap:.2f})")
+    print(f"#{rank}  score {comparison.total:.2f}  "
+          f"(gap from ideal {comparison.total_gap:.2f})  -- {alternative.reason}")
     for s in sorted(option.schedule, key=lambda s: (s.course_code, s.kind)):
         who = s.instructor or "(no instructor listed)"
         rating = professor_ratings.get(s.instructor)

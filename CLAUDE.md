@@ -71,7 +71,7 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `campuses.py` | NYU campus constants + the Location filter codes the provider queries |
 | `constraints.py` | `Constraint` interface + `RequiredInstructor` + `CommuteBuffer`; hard filters applied before scoring |
 | `ratings.py` | `RatingProvider` interface + `RMPRatings` (RateMyProfessor) + `NullRatings` |
-| `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules`, `distinct_schedules` |
+| `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules`, `distinct_schedules`, `diverse_top` |
 | `narrator.py` | `Narrator` interface + `build_findings` + `TemplateNarrator` (deterministic) + `OpenAICompatNarrator` + `ClaudeNarrator` |
 | `main.py` | CLI entry point: argparse flags, interactive prompts when run bare, result display |
 | `tests/` | pytest suite. Offline by default; `tests/fixtures/` holds recorded responses |
@@ -120,6 +120,22 @@ independent concerns. Swapping the data source touches nothing downstream.
   or an invented time all fall back to `TemplateNarrator`, whose output is the
   pre-narration format exactly. A deliberate exception to "fail loudly", which
   governs *data*: losing commentary is not the same as getting a fact wrong.
+- **Rank by score, but spend the top-N on alternatives.** De-duplication was
+  necessary and not sufficient: with six factors an honest ranking fills the
+  top ten with ten variations on one trade-off, because a schedule that wins
+  slightly on five factors always outranks one that wins hugely on the sixth.
+  For the four-course example every displayed week was a five-day week, while
+  the best three-day week sat 97 distinct weeks down. `diverse_top` reserves
+  rows for the best schedule on each factor. **The scoring factors are the
+  diversity axes** — deliberately, over a generic similarity metric, because a
+  row picked for being "0.3 dissimilar" cannot explain itself while "best for
+  days on campus" is simultaneously the selection rule and the label. Two
+  rules keep it honest: a candidate must beat everything already shown on its
+  own factor by `MIN_DIVERSITY_GAIN`, so a slot is never spent on a
+  non-alternative; and picks are greedy by largest gain, so the most different
+  option comes first and a schedule leading on two factors cannot take two
+  rows. Like `distinct_schedules`, this lives at the display boundary — the
+  ranking underneath is untouched.
 - **Minutes since midnight** for all times. Makes overlap detection two integer
   comparisons.
 - **Normalize every scoring factor to 0..1** before weighting, so incommensurable
@@ -463,7 +479,7 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   per-schedule call shape chosen for caching.
 - **Narration is not cached.** Every run re-narrates, so re-running the same
   course list pays for the same prose twice. Harmless while N is 3 and the
-  provider is free; the fix is roadmap item 4, and the per-schedule call shape
+  provider is free; the fix is roadmap item 3, and the per-schedule call shape
   was chosen to make it a cache rather than a rewrite.
 - **Free-tier model names drift.** `PROVIDERS` pins a default model per
   provider and these get retired regularly. `NARRATOR_MODEL` overrides without
@@ -476,7 +492,7 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   interchangeable, which `distinct_schedules` now collapses on display. Ties
   that survive collapsing are different weeks scoring equally, which is a
   correct result, not a bug.
-- **Coverage is behavioral, not exhaustive.** 151 offline tests plus 9 live ones
+- **Coverage is behavioral, not exhaustive.** 193 offline tests plus 9 live ones
   cover the scoring factors, duplicate collapsing, both linkage strategies,
   bundling, campus tagging, constraints, and both scrapers. `main.py` itself is
   untested (argparse wiring, prompts, display formatting), and there is no
@@ -491,32 +507,35 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   *display* (see the design principle), but generation and scoring still walk
   every combination, so runtime and memory scale with the raw count, not the
   462 weeks that survive collapsing.
-- **Collapsing does not surface genuinely different tradeoffs.** It removes
-  duplicates, not sameness. For the course list above with Bari required, all
-  ten displayed weeks are still 5-day weeks differing by one recitation slot,
-  because ranking is honest: `days_on_campus` carries 1 of 9 total weight, so
-  the best **4-day** week sits at rank 583 (0.624) and the best **3-day** week
-  at rank 1984 (0.575), against 0.668 at the top. Both exist and neither is
-  reachable by scrolling a top-10. Reserving top-N slots for schedules that are
-  *different* rather than merely next-best is the open half of this problem.
+- **Diversity is only as good as the factors.** `diverse_top` reserves slots
+  along the six scoring factors, so an alternative that is different in a way
+  no factor measures -- a specific building, a professor's teaching style, a
+  day a student wants free for work -- cannot be surfaced, because nothing
+  scores it. Adding a factor is what widens the axes, not tuning the picker.
+- **Most reserved slots go unspent.** On the four-course example only 2 of 6
+  factors cleared `MIN_DIVERSITY_GAIN`; the remaining 7 rows are next-best by
+  score and still look alike. That is honest -- those alternatives genuinely
+  do not exist in this catalog -- but it means diversity helps most on course
+  lists that have real structural variety, and does nothing on ones that do
+  not.
 
 ---
 
 ## Next steps
 
-1. **Top-N diversity.** De-duplication is done (`distinct_schedules`); spreading
-   is not. The ten distinct weeks shown are still ten variations on one shape,
-   while the best 3-day and 4-day weeks sit hundreds of rows down (see Known
-   gaps). Reserve slots for schedules that differ *structurally* — fewest days,
-   latest start, best professor — so the list shows real alternatives rather
-   than the same tradeoff ten times.
-2. **FastAPI route layer** over the existing logic.
-3. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
+1. **FastAPI route layer** over the existing logic. Shape it around the
+   measured cost split, not as one endpoint: courses + term drive generation
+   (~7s of combinatorics plus a cacheable network fetch), required professors
+   and commute buffer drive filtering (~2.6s), while preferred days, time
+   window and all six weights drive **only** ranking — 0.44s for 8,538
+   schedules. Generate once and re-rank many times, or every weight slider
+   costs 13 seconds instead of half of one.
+2. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
    bars, expandable AI explanation.
-4. Lazy + cached narration (generate on expand, remember the result) rather than
+3. Lazy + cached narration (generate on expand, remember the result) rather than
    narrating the whole ranked list. The per-schedule call shape already fits
    this; it needs a cache keyed on `schedule_shape`, not a restructure.
-5. Deploy, with a README containing an architecture diagram and a demo GIF.
+4. Deploy, with a README containing an architecture diagram and a demo GIF.
 
 Done since the last pass: RateMyProfessor ratings behind a `RatingProvider`
 interface, with strict name matching and Bayesian shrinkage — the professor
@@ -542,6 +561,14 @@ exactly why the problem hid for so long — the documented example structurally
 could not show it. Fixed at the display boundary rather than in ranking, so the
 core stays deterministic and every real registration option is still
 enumerated.
+
+Then `diverse_top`, the other half of that problem. Collapsing removed
+duplicates but not sameness: all ten displayed weeks were still five-day weeks
+differing by one recitation. Reserving rows for the best schedule on each
+scoring factor moved a genuine three-day week from 97 distinct-weeks down
+(concrete rank 1984) to row #2, labelled with the axis that earned it. Only 2
+of 6 factors cleared the gain threshold, which is the rule working: a slot is
+never spent on an alternative that is not one.
 
 Then `narrator.py`, which had been described in this document since the first
 commit without ever existing. Built provider-agnostic and free-first:

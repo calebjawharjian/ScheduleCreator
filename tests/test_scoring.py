@@ -3,7 +3,7 @@ import pytest
 from models import Day, Meeting, Section, SectionKind, hhmm
 from scoring import (
     Preferences, score_schedule, rank_schedules, compare_to_ideal,
-    distinct_schedules, schedule_shape,
+    distinct_schedules, schedule_shape, diverse_top,
     DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
     _score_days, _score_time, _score_professor,
     _score_days_on_campus, _score_idle_time, _score_late_start,
@@ -305,3 +305,108 @@ def test_section_order_within_a_schedule_does_not_matter():
 
 def test_empty_input_collapses_to_nothing():
     assert distinct_schedules([]) == []
+
+
+# --- reserving slots for genuinely different weeks ---------------------------
+#
+# Collapsing duplicates was not enough: for a real four-course list every one
+# of the ten displayed weeks was a five-day week differing by one recitation,
+# while the best four-day week sat at rank 583 and the best three-day week at
+# rank 1984. Both existed; neither was reachable by scrolling.
+
+def week(days, instructor=None, start="13:00"):
+    """A schedule occupying the given days, one meeting each."""
+    return [sec(f"{d.name}-{start}", meetings=[m(d, start, "14:00")],
+                instructor=instructor) for d in days]
+
+
+def alternatives(schedules, p=None, limit=10):
+    p = p or prefs()
+    return diverse_top(distinct_schedules(rank_schedules(schedules, p)), limit=limit)
+
+
+def test_the_best_overall_schedule_is_always_first():
+    """Diversity must not cost the top answer its place."""
+    best = week([Day.MON])
+    worse = week([Day.SAT])
+    picks = alternatives([worse, best])
+    assert picks[0].option.schedule is best
+    assert picks[0].reason == "best overall"
+
+
+def test_a_structurally_different_week_is_promoted_over_a_near_duplicate():
+    """The whole point: a three-day week that ranks below several five-day
+    weeks still gets a slot, because nothing shown offers it."""
+    five_day = [week([Day.MON, Day.TUE, Day.WED, Day.THU, Day.FRI], start=s)
+                for s in ("13:00", "13:15", "13:30", "13:45")]
+    three_day = week([Day.MON, Day.TUE, Day.WED], start="09:00")
+
+    picks = alternatives(five_day + [three_day], limit=3)
+    promoted = [a for a in picks if a.option.schedule is three_day]
+    assert promoted, "the three-day week should have earned a reserved slot"
+    assert promoted[0].factor == DAYS_ON_CAMPUS
+    assert promoted[0].reason == "best for days on campus"
+
+
+def test_a_slot_is_not_spent_when_nothing_better_exists():
+    """If every week is five days, 'fewest days' is not an alternative and
+    must not cost a row -- those slots fall through to next-best by score."""
+    same_shape = [week([Day.MON, Day.TUE, Day.WED, Day.THU, Day.FRI], start=s)
+                  for s in ("13:00", "13:15", "13:30")]
+    picks = alternatives(same_shape)
+    assert not any(a.factor == DAYS_ON_CAMPUS for a in picks)
+    assert [a.reason for a in picks[1:]] == ["next best"] * (len(picks) - 1)
+
+
+def test_one_schedule_cannot_take_two_slots():
+    """A week that leads on several factors is still one row. Without the
+    greedy update it would be picked once per factor it happens to win."""
+    all_rounder = week([Day.MON], start="11:00")
+    picks = alternatives([week([Day.SAT], start="08:00"), all_rounder], limit=6)
+    chosen = [id(a.option) for a in picks]
+    assert len(chosen) == len(set(chosen))
+
+
+def test_alternatives_never_repeat_a_week():
+    """Built so a reserved slot IS taken and slots remain for filler, which is
+    the only arrangement where a promoted week could be listed twice -- once
+    as an alternative and again as next-best."""
+    weeks = [week([Day.MON, Day.TUE, Day.WED, Day.THU, Day.FRI], start=s)
+             for s in ("13:00", "13:15", "13:30", "13:45")]
+    weeks.append(week([Day.MON], start="09:00"))   # earns a reserved slot
+
+    picks = alternatives(weeks, limit=10)
+    assert any(a.reason.startswith("best for") for a in picks), \
+        "test is pointless unless a slot is actually reserved"
+    assert any(a.reason == "next best" for a in picks), \
+        "test is pointless unless the filler pass also runs"
+
+    shapes = [schedule_shape(a.option.schedule) for a in picks]
+    assert len(shapes) == len(set(shapes))
+
+
+def test_reserved_slots_come_before_filler():
+    """Greedy by largest gain, so the most different option is the one the
+    student sees first, not buried under next-bests."""
+    weeks = [week([Day.MON, Day.TUE, Day.WED, Day.THU, Day.FRI], start=s)
+             for s in ("13:00", "13:15", "13:30", "13:45")]
+    weeks.append(week([Day.MON], start="09:00"))
+    reasons = [a.reason for a in alternatives(weeks)]
+    assert reasons[0] == "best overall"
+    filler = [i for i, r in enumerate(reasons) if r == "next best"]
+    reserved = [i for i, r in enumerate(reasons) if r.startswith("best for")]
+    assert not filler or not reserved or min(filler) > max(reserved)
+
+
+def test_limit_is_respected():
+    weeks = [week([d]) for d in (Day.MON, Day.TUE, Day.WED, Day.THU, Day.FRI)]
+    assert len(alternatives(weeks, limit=3)) == 3
+
+
+def test_a_single_week_yields_a_single_row():
+    picks = alternatives([week([Day.MON])])
+    assert len(picks) == 1 and picks[0].reason == "best overall"
+
+
+def test_no_schedules_yields_no_alternatives():
+    assert diverse_top([]) == []
