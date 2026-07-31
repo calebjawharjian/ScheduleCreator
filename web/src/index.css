@@ -1,0 +1,239 @@
+/* Plain CSS, no framework. The surface is small enough that a utility library
+   would be more build config than saved effort, and the week grid needs real
+   positioning rather than utility classes anyway. */
+
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel-2: #1e222b;
+  --line: #2a2f3a;
+  --text: #e6e8ee;
+  --muted: #9aa3b2;
+  --accent: #7aa2f7;
+  --accent-dim: #2b3550;
+  --warn: #e0af68;
+  --bad: #f7768e;
+  --radius: 10px;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --panel-2: #f0f2f6;
+    --line: #dfe3ea;
+    --text: #1b1f27;
+    --muted: #626b7b;
+    --accent: #3b64d8;
+    --accent-dim: #dbe4fb;
+    --warn: #8a6100;
+    --bad: #b3253c;
+    color-scheme: light;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.app { max-width: 1500px; margin: 0 auto; padding: 24px 20px 60px; }
+
+header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+.tagline { margin: 4px 0 20px; color: var(--muted); }
+
+/* --- setup row ----------------------------------------------------------- */
+
+.setup {
+  display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 14px;
+}
+.setup .grow { flex: 1 1 380px; }
+.setup label { display: flex; flex-direction: column; gap: 6px; }
+.setup label > span { font-size: 12px; color: var(--muted); }
+
+input, select {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 9px 10px; font: inherit; font-size: 14px;
+}
+input:focus, select:focus { outline: 2px solid var(--accent-dim); border-color: var(--accent); }
+
+button.primary {
+  background: var(--accent); color: #fff; border: 0;
+  border-radius: 8px; padding: 10px 18px; font: inherit; font-weight: 600;
+  cursor: pointer;
+}
+button.primary:disabled { opacity: 0.6; cursor: progress; }
+
+/* --- summary chips -------------------------------------------------------- */
+
+.summary { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 18px; }
+.chip {
+  display: inline-flex; gap: 6px; align-items: baseline;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 999px; padding: 5px 12px; font-size: 13px;
+}
+.chip em { color: var(--muted); font-style: normal; font-size: 12px; }
+.chip.quiet { color: var(--muted); }
+.chip.missing { border-color: var(--bad); color: var(--bad); }
+
+.error, .warn {
+  border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px;
+  border: 1px solid var(--bad); color: var(--bad); background: var(--panel);
+}
+.warn { border-color: var(--warn); color: var(--warn); }
+
+/* --- layout --------------------------------------------------------------- */
+
+main {
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr) 300px;
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 1200px) { main { grid-template-columns: 1fr; } }
+
+aside, .results {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 16px;
+}
+
+/* --- controls ------------------------------------------------------------- */
+
+.controls section + section { margin-top: 22px; }
+.controls h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase;
+               letter-spacing: 0.06em; color: var(--muted); }
+.hint { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.row { display: flex; gap: 10px; }
+.row label { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.row label > span { font-size: 12px; color: var(--muted); }
+
+.day-toggles { display: flex; gap: 6px; }
+.day {
+  flex: 1; padding: 7px 0; border-radius: 8px; cursor: pointer;
+  background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--line); font: inherit; font-size: 13px;
+}
+.day.on { background: var(--accent-dim); color: var(--text); border-color: var(--accent); }
+
+.slider { display: block; margin-bottom: 12px; }
+.slider-label {
+  display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px;
+}
+.slider-label em { color: var(--accent); font-style: normal; font-variant-numeric: tabular-nums; }
+.slider input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+.require { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.require > span { font-size: 12px; color: var(--muted); }
+
+/* --- week grid ------------------------------------------------------------ */
+
+.week { transition: opacity 120ms ease; }
+.week.stale { opacity: 0.55; }
+
+.grid { display: flex; gap: 8px; height: 460px; }
+.grid-hours { position: relative; width: 46px; flex: none; }
+.grid-hour {
+  position: absolute; right: 0; transform: translateY(-50%);
+  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.grid-days { display: flex; gap: 6px; flex: 1; min-width: 0; }
+.grid-day { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.grid-day-label {
+  text-align: center; font-size: 12px; color: var(--muted);
+  padding-bottom: 6px; font-weight: 600;
+}
+.grid-day-body {
+  position: relative; flex: 1;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  overflow: hidden;
+}
+.grid-line { position: absolute; left: 0; right: 0; height: 1px; background: var(--line); }
+
+.block {
+  position: absolute; left: 3px; right: 3px;
+  border-radius: 6px; padding: 4px 6px; overflow: hidden;
+  display: flex; flex-direction: column; gap: 1px;
+  background: hsl(var(--hue) 60% 26%);
+  border-left: 3px solid hsl(var(--hue) 70% 62%);
+  color: #fff; font-size: 11px; line-height: 1.25;
+}
+@media (prefers-color-scheme: light) {
+  .block { background: hsl(var(--hue) 78% 92%); color: hsl(var(--hue) 60% 22%);
+           border-left-color: hsl(var(--hue) 55% 48%); }
+}
+.block-code { font-weight: 700; white-space: nowrap; }
+.block-kind { opacity: 0.75; }
+.block-time { opacity: 0.75; font-variant-numeric: tabular-nums; }
+
+.empty { color: var(--muted); }
+
+/* --- section table -------------------------------------------------------- */
+
+.sections { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 13px; }
+.sections th {
+  text-align: left; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); font-weight: 600;
+  padding: 6px 8px; border-bottom: 1px solid var(--line);
+}
+.sections td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
+.sections tr:last-child td { border-bottom: 0; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.quiet { color: var(--muted); }
+.rating {
+  margin-left: 6px; font-style: normal; font-size: 11px;
+  color: var(--accent); background: var(--accent-dim);
+  padding: 1px 6px; border-radius: 999px;
+}
+
+.explanation {
+  margin: 16px 0 0; padding: 12px 14px;
+  background: var(--panel-2); border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+}
+
+/* --- alternatives --------------------------------------------------------- */
+
+.alt-panel h3 {
+  margin: 0 0 10px; font-size: 13px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted);
+  display: flex; align-items: center; gap: 8px;
+}
+.alternatives { list-style: none; margin: 0; padding: 0;
+                display: flex; flex-direction: column; gap: 8px; }
+
+.alt {
+  width: 100%; text-align: left; cursor: pointer; font: inherit;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.alt:hover { border-color: var(--accent); }
+.alt.selected { border-color: var(--accent); background: var(--accent-dim); }
+
+.alt-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.alt-reason { font-size: 13px; font-weight: 600; }
+/* Reserved rows are the whole point of diverse_top, so they have to read
+   differently from the ones that are merely next in score order. */
+.alt-reason.reserved { color: var(--accent); }
+.alt-score { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.alt-meta { font-size: 11px; color: var(--muted); }
+
+.bars { display: flex; gap: 3px; align-items: flex-end; height: 26px; }
+.bar { flex: 1; height: 100%; background: var(--line); border-radius: 2px;
+       position: relative; overflow: hidden; }
+.bar-fill { position: absolute; bottom: 0; left: 0; right: 0; background: var(--accent); }
+
+.spinner {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

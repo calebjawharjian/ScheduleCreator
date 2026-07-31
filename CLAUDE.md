@@ -41,6 +41,12 @@ This project is a learning exercise as much as a deliverable. When helping:
 - **Run the API:** `./venv/bin/python -m uvicorn api:app --reload`. Docs at
   `/docs`. The CLI still works and is the quickest way to sanity-check a
   change end to end.
+- **Run the frontend:** `cd web && npm run dev` (port 5173, expects the API
+  on 8000). **Node came from nvm and is not on a non-interactive PATH** —
+  same discipline as the venv, use it explicitly:
+  `export PATH="$HOME/.nvm/versions/node/v24.18.1/bin:$PATH"`.
+- `node_modules` lives on `/mnt/c`, so `npm install` and cold dev-server
+  start are slow. Runtime is unaffected.
 - **Tests:** `./venv/bin/python -m pytest` runs the offline suite (no network,
   ~1.5s). `pytest -m live` runs the checks that hit NYU's real endpoints. An
   autouse fixture makes any unmarked test that reaches the network fail, so the
@@ -78,6 +84,7 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules`, `distinct_schedules`, `diverse_top` |
 | `narrator.py` | `Narrator` interface + `build_findings` + `TemplateNarrator` (deterministic) + `OpenAICompatNarrator` + `ClaudeNarrator` |
 | `api.py` | FastAPI layer: `/generate` (expensive, cached) + `/rank` (interactive) + `/factors` |
+| `web/` | React + TypeScript (Vite). Week grid, weight sliders, labelled alternatives |
 | `main.py` | CLI entry point. Scaffolding that predates the web UI; delete once the frontend covers it |
 | `tests/` | pytest suite. Offline by default; `tests/fixtures/` holds recorded responses |
 | `tests/test_live_data.py` | **Keep.** Live guards for linkage + both joins; `pytest -m live` |
@@ -573,11 +580,15 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 
 ## Next steps
 
-1. **React + TypeScript frontend**: weight sliders, a weekly calendar grid,
-   per-factor score bars, expandable AI explanation. The API is in place and
-   measured (see below), so this is the remaining product work.
+1. **Narration in the UI.** The API takes `narrate` and returns
+   `explanation` per alternative, but the frontend requests 0. Wire it to
+   generate on expand, which is also where the per-schedule cache belongs.
 2. **Retire `main.py`** once the frontend covers what it does. It is
    scaffolding from before there was anywhere else to put output.
+3. **Frontend tests.** There are none. Playwright is installed in the venv and
+   can drive the real app, but its Chromium needs system libs that are not
+   installed (`playwright install-deps` needs sudo); the screenshot run used
+   locally-extracted `.deb`s in a scratch dir that does not persist.
 3. Lazy + cached narration (generate on expand, remember the result) rather than
    narrating the whole ranked list. The per-schedule call shape already fits
    this; it needs a cache keyed on `schedule_shape`, not a restructure.
@@ -622,6 +633,15 @@ A correction to an earlier figure recorded here: the first profile ran under
 `tracemalloc`, which inflates allocation-heavy code. Filtering is ~0.7s, not
 the 2.6s originally noted. The shape of the split was right; the magnitudes
 were overstated.
+
+Then the frontend: Vite + React + TypeScript in `web/`, plain CSS, no UI
+framework. The schedule renders as an actual week -- blocks positioned from
+`meeting.start`/`end` in minutes, which is why the API sends both the number
+and the formatted label rather than making the browser re-derive a clock time.
+Weight changes debounce 180ms and abort the previous request, because an
+out-of-order reply would show a ranking that disagrees with the controls.
+Verified by driving the real app headlessly against live Fall 2026 data: 10
+alternatives, 4 of them reserved slots, no console errors.
 
 Then `diverse_top`, the other half of that problem. Collapsing removed
 duplicates but not sameness: all ten displayed weeks were still five-day weeks
