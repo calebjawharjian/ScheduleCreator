@@ -138,6 +138,42 @@ def test_a_factor_is_only_a_sacrifice_if_something_else_did_better():
     assert gave_up[0]["best_available"] == 1.0
 
 
+def test_trivial_shortfalls_are_not_reported_as_sacrifices():
+    """A 0.85-vs-0.89 gap is not a trade anyone made on purpose. Reporting all
+    four shortfalls buried the only one that mattered, and the model dutifully
+    listed them all."""
+    schedule = [sec("A 1", meetings=[m(Day.MON, "13:00", "14:00")])]
+    p = prefs()
+    barely = {n: v + 0.02 for n, v in score_schedule(schedule, p).factors.items()}
+    assert findings_for(schedule, p, achievable=barely)["sacrifices"] == []
+
+
+def test_sacrifices_are_ranked_by_size_and_capped():
+    schedule = [sec("A 1", meetings=[m(Day.TUE, "09:00", "10:00")])]
+    p = prefs()
+    scored = score_schedule(schedule, p).factors
+    spread = {DAYS: 0.9, TIME: 0.5, PROFESSOR: 0.8,
+              DAYS_ON_CAMPUS: 0.3, IDLE_TIME: 0.2, LATE_START: 0.95}
+    achievable = {n: min(1.0, scored[n] + spread[n]) for n in scored}
+
+    found = findings_for(schedule, p, achievable=achievable)["sacrifices"]
+    assert len(found) == 3, "should keep only the largest few"
+    shortfalls = [s["shortfall"] for s in found]
+    assert shortfalls == sorted(shortfalls, reverse=True)
+
+
+def test_day_counts_are_given_as_numbers_not_scores():
+    """The model cannot know 'days on campus 0.0' means five days, so the
+    count and the best alternative are handed over directly."""
+    schedule = [
+        sec("A 1", meetings=[m(Day.MON, "09:00", "10:00")]),
+        sec("B 2", meetings=[m(Day.WED, "09:00", "10:00")]),
+    ]
+    found = findings_for(schedule, fewest_days_available=1)
+    assert found["days_on_campus_count"] == 2
+    assert found["fewest_days_available"] == 1
+
+
 def test_no_achievable_data_means_no_sacrifices_claimed():
     """Better to say nothing than to assert a trade-off we cannot support."""
     schedule = [sec("A 1", meetings=[m(Day.TUE, "09:00", "10:00")])]
@@ -159,7 +195,9 @@ def test_requirements_and_compromises_are_passed_through():
         requirements=[RequiredInstructor("CSCI-UA 102", "Anasse Bari")],
         compromised=[buffer])
 
-    assert found["required"] == ["CSCI-UA 102 taught by Anasse Bari"]
+    assert found["required"][0]["requirement"] == "CSCI-UA 102 taught by Anasse Bari"
+    # The day the requirement actually pins, not just that one exists.
+    assert found["required"][0]["meets_on"] == ["MON"]
     assert found["compromises"][0]["requirement"] == "30 minutes between campuses"
     assert found["compromises"][0]["details"], "should name the failing transition"
 
@@ -318,3 +356,29 @@ def test_model_can_be_overridden_without_touching_code():
     narrator, _ = narrator_from_env(
         {"GROQ_API_KEY": "g", "NARRATOR_MODEL": "llama-3.1-8b-instant"})
     assert narrator.model == "llama-3.1-8b-instant"
+
+
+def test_a_requirement_reports_only_the_days_its_own_section_meets():
+    """Regression on a wrong claim in real output: with Bari teaching Friday
+    and the recitation on Monday, the model wrote 'CSCI-UA 102 on Monday
+    because it is required'. The requirement pins Friday only."""
+    schedule = [
+        sec("CSCI-UA 102", instructor="Anasse Bari",
+            meetings=[m(Day.FRI, "11:00", "13:30")]),
+        sec("CSCI-UA 102", SectionKind.RECITATION,
+            meetings=[m(Day.MON, "09:30", "10:45")], section_id="rct"),
+    ]
+    found = findings_for(schedule, requirements=[
+        RequiredInstructor("CSCI-UA 102", "Anasse Bari")])
+    assert found["required"][0]["meets_on"] == ["FRI"]
+
+
+def test_a_requirement_with_no_matching_section_claims_no_days():
+    """CommuteBuffer and the like pin no particular day, so they must not
+    acquire one."""
+    schedule = [
+        sec("A 1", meetings=[m(Day.MON, "09:00", "10:00")], campus="Washington Square"),
+        sec("B 2", meetings=[m(Day.MON, "10:10", "11:00")], campus="Brooklyn (Tandon)"),
+    ]
+    found = findings_for(schedule, requirements=[CommuteBuffer(30)])
+    assert "meets_on" not in found["required"][0]

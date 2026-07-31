@@ -53,25 +53,45 @@ AUTO_ORDER = ("groq", "gemini", "openrouter", "deepseek", "anthropic")
 
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 
+# A shortfall smaller than this is not a trade anyone made on purpose, and
+# listing it crowds out the ones that are.
+MIN_SACRIFICE = 0.05
+MAX_SACRIFICES = 3
+
 SYSTEM_PROMPT = textwrap.dedent("""\
     You explain university course schedules to the student who will register
-    for one. You are given a JSON object of facts that have already been
-    decided by a deterministic scheduler. Your only job is to phrase them.
+    for one. You are given JSON facts already decided by a deterministic
+    scheduler. Phrase them. Decide nothing.
 
-    Write 2-3 sentences, second person, plain and specific. Explain WHY this
-    schedule looks the way it does and what it gave up -- the causes and the
-    sacrifices, not a list of its properties. Lead with whatever actually
-    constrained the outcome (a required professor, a campus commute, a course
-    with few sections).
+    Write AT MOST 2 sentences, under 50 words, second person.
 
-    Hard rules:
-    - Use only facts present in the JSON. Never invent or infer a number.
-    - Never write a clock time. You are not given any. Express durations in
-      words: "an hour and forty minutes", never "1:40".
-    - Do not restate the numeric score, and do not recommend or rank. The
-      student is shown the exact days, times and CRNs separately, so do not
-      attempt to list them.
-    - If `sacrifices` is empty, say plainly that nothing had to be given up.
+    Sentence one is the CAUSE. Use `required`, `compromises`, `campus_changes`
+    or `longest_gap`, and name the actual course and day. Not "your schedule
+    was constrained" -- say which course pins which day. A requirement pins
+    only the days in its own `meets_on`; never attribute a different day to
+    it, even if that course also meets then.
+
+    Sentence two is `biggest_sacrifice`, stated concretely. Ignore the rest of
+    `sacrifices`; that field is context, not a list to recite.
+
+    Rules:
+    - Use only what is in the JSON. Never infer or invent a number.
+    - Never write a clock time; you are given none. Put durations in words
+      ("an hour and forty minutes"), never as digits with a colon.
+    - Scores are 0-1 where 1 is ideal. Never quote a score. Say what it means:
+      `days_on_campus_count` 5 with `fewest_days_available` 3 is "five days on
+      campus when three was possible".
+    - Name real courses and days from `days_on_campus`. Banned as vague:
+      "some", "certain", "various", "in order to make this work", "as a
+      result", "in terms of", "less than ideal", "specifically".
+    - Never explain a factor by naming it again. "Professor quality was
+      sacrificed because the professor quality score is low" says nothing;
+      give the rating from `professors` and what was achievable instead.
+    - `sacrifices` is the complete list of what a better schedule achieved.
+      Claim nothing was given up ONLY if that list is empty. If it is
+      non-empty, never write that nothing was sacrificed.
+    - State the requirement once. Do not repeat it in both sentences.
+    - Do not recommend, rank, or compare to other schedules.
     """)
 
 # We never supply clock times, so one in the output was fabricated.
@@ -115,6 +135,27 @@ def _longest_gap(days: dict[Day, list[tuple]]) -> dict | None:
     return worst
 
 
+def _required_facts(constraint, schedule: list[Section]) -> dict:
+    """A requirement plus the days it actually pins.
+
+    Without `meets_on` the model has a requirement and a day map and no link
+    between them, so it guesses -- it reported "CSCI-UA 102 on Monday because
+    it is required" when the required professor teaches Friday and Monday was
+    only the recitation. Which day a requirement forces is knowable in code,
+    so it is computed here rather than left to inference.
+    """
+    fact = {"requirement": constraint.describe()}
+    course = getattr(constraint, "course_code", None)
+    instructor = getattr(constraint, "instructor", None)
+    if course and instructor:
+        days = {m.day for s in schedule
+                if s.course_code == course and s.instructor == instructor
+                for m in s.meetings}
+        if days:
+            fact["meets_on"] = [d.name for d in sorted(days)]
+    return fact
+
+
 def _campus_hops(days: dict[Day, list[tuple]]) -> list[dict]:
     hops = []
     for day, timeline in days.items():
@@ -132,6 +173,7 @@ def build_findings(
     *,
     rank: int,
     achievable: dict[str, float] | None = None,
+    fewest_days_available: int | None = None,
     requirements=(),
     compromised=(),
 ) -> dict:
@@ -168,15 +210,22 @@ def build_findings(
         1 for s in schedule for m in s.meetings
         if m.start < prefs.time_start or m.end > prefs.time_end)
 
+    # Ranked by size and trimmed. A first pass handed over every shortfall,
+    # including 0.85-vs-0.89 ones, and the model dutifully listed all four --
+    # burying the only sacrifice that mattered (a five-day week where three
+    # was available) in noise. Fewer, larger facts produce sharper prose.
     sacrifices = []
     for name, score in option.breakdown.factors.items():
         best = (achievable or {}).get(name)
-        if best is not None and best - score > 0.01:
+        if best is not None and best - score > MIN_SACRIFICE:
             sacrifices.append({
                 "factor": FACTOR_LABELS[name],
                 "this_schedule": round(score, 2),
                 "best_available": round(best, 2),
+                "shortfall": round(best - score, 2),
             })
+    sacrifices.sort(key=lambda s: s["shortfall"], reverse=True)
+    sacrifices = sacrifices[:MAX_SACRIFICES]
 
     return {
         "rank": rank,
@@ -186,6 +235,11 @@ def build_findings(
             day.name: sorted({_label(s) for _, s in timeline})
             for day, timeline in sorted(days.items())
         },
+        # Counts, not scores. "days on campus 0.0 vs 0.5" is unreadable to a
+        # model; "5 when 3 was possible" is the same fact in a form it can
+        # actually say, and it is the sacrifice students care about most.
+        "days_on_campus_count": len(days),
+        "fewest_days_available": fewest_days_available,
         "days_outside_preference": sorted(
             day.name for day in days if day not in prefs.preferred_days),
         # A count, not the window itself. Findings deliberately contain no
@@ -198,7 +252,7 @@ def build_findings(
         "unrated_professors": [s.instructor for s in lectures
                                if s.instructor and s.instructor
                                not in prefs.professor_ratings],
-        "required": [r.describe() for r in requirements],
+        "required": [_required_facts(r, schedule) for r in requirements],
         "compromises": [
             {"requirement": c.describe(),
              "details": c.violations(schedule) if hasattr(c, "violations") else []}
@@ -207,6 +261,11 @@ def build_findings(
         "factor_scores": {FACTOR_LABELS[n]: round(v, 2)
                           for n, v in option.breakdown.factors.items()},
         "sacrifices": sacrifices,
+        # Pulled out rather than left as sacrifices[0]. Asked to pick the
+        # largest from an ordered list, the model picked a 0.09 shortfall over
+        # a 0.50 one. Anything code already knows should be handed over, not
+        # inferred.
+        "biggest_sacrifice": sacrifices[0] if sacrifices else None,
         "strongest": FACTOR_LABELS[comparison.strengths[0].name],
         "biggest_tradeoff": FACTOR_LABELS[comparison.weaknesses[0].name],
         # Carried so TemplateNarrator can reproduce the exact pre-narration

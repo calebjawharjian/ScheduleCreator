@@ -365,6 +365,12 @@ if len(distinct) < len(ranked):
 achievable = {name: max(b.factors[name] for _, b in ranked)
               for name in FACTOR_LABELS}
 
+# Counted directly rather than inverted out of the days-on-campus score, so
+# narration never has to reverse-engineer a scoring formula to say "three days
+# was possible".
+fewest_days_available = min(
+    len({m.day for s in sched for m in s.meetings}) for sched, _ in ranked)
+
 template = TemplateNarrator()
 if args.no_narrate:
     narrator, backend = template, "template"
@@ -397,6 +403,7 @@ for rank, option in enumerate(distinct[:TOP_N], 1):
     # you register against. Only the commentary below is model-written, and
     # only for the first --narrate schedules, since each one costs a call.
     findings = build_findings(option, prefs, rank=rank, achievable=achievable,
+                              fewest_days_available=fewest_days_available,
                               requirements=requirements, compromised=compromised)
     explanation = (narrator if rank <= args.narrate else template).narrate(findings)
     for line in explanation.splitlines():

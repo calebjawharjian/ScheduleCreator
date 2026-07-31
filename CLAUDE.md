@@ -104,6 +104,18 @@ independent concerns. Swapping the data source touches nothing downstream.
   brackets the longest gap, which requirement pinned the result, and — via
   `achievable`, the best score anything reached per factor — what was actually
   given up rather than merely scored low.
+- **Anything code already knows must be handed over, never inferred.** The
+  single lesson of the prompt-tuning pass, learned three times against a real
+  model. Each wrong output traced to a fact that existed in code but was left
+  for the model to derive: (1) it wrote vague filler about "professor quality"
+  because `days on campus: 0.0 vs 0.5` is unreadable — fixed by sending
+  `days_on_campus_count: 5` and `fewest_days_available: 3`; (2) asked to pick
+  the largest item from a sorted list it chose a 0.09 shortfall over a 0.50 one
+  — fixed by lifting `biggest_sacrifice` into its own field; (3) it wrote
+  "CSCI-UA 102 on Monday because it is required" when the required professor
+  teaches **Friday** and Monday was only the recitation — fixed by computing
+  `meets_on` per requirement. Prompt wording fixed none of these; supplying the
+  derived fact fixed all three. Each is now a regression test.
 - **Narration degrades, it does not fail.** No key, no network, a bad response
   or an invented time all fall back to `TemplateNarrator`, whose output is the
   pre-narration format exactly. A deliberate exception to "fail loudly", which
@@ -436,14 +448,19 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   factor still fails to discriminate between those schedules. There is also no
   way to confirm a match is the *right* person beyond name + department; the
   strict matching reduces that risk rather than eliminating it.
-- **Narration has never run against a real provider.** `narrator.py` exists and
-  the whole path is verified — but with a local stand-in server, not a hosted
-  model, because no key was available when it was built. The transport, request
-  shape, response parsing, guard and fallback are all confirmed; **the quality
-  of real model output is not.** Expect the system prompt to need tuning on
-  first contact, especially "never write a clock time", which a weaker free-tier
-  model may well violate. That failure is safe (the guard falls back) but it
-  would mean losing narration rather than getting bad narration.
+- **Narration is verified against Groq (`llama-3.3-70b-versatile`) only.**
+  One provider, one model, one course list. The no-clock-time rule held on
+  every run — the guard never fired — but the three factual errors above all
+  appeared in real output and were only visible by reading it. Other providers
+  and other course lists are unexercised; assume the prompt needs another pass
+  when either changes.
+- **Narration quality is uneven across schedules.** Of three narrated weeks,
+  one read well ("CSCI-UA 102 on Friday because it is required to be taught by
+  Anasse Bari"), one was correct but terse. The prose also converges: near-
+  identical weeks produce near-identical text, which is honest but adds little
+  per schedule. Since each call sees one schedule and no siblings, contrast
+  between options is structurally unavailable — a consequence of the
+  per-schedule call shape chosen for caching.
 - **Narration is not cached.** Every run re-narrates, so re-running the same
   course list pays for the same prose twice. Harmless while N is 3 and the
   provider is free; the fix is roadmap item 4, and the per-schedule call shape
@@ -487,23 +504,19 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 
 ## Next steps
 
-1. **Point narration at a real provider and tune the prompt.** Everything is
-   built and verified against a stand-in; put a free key in `.env` and read
-   what an actual model writes (see Known gaps). This is a prompt-quality
-   pass, not a code one.
-2. **Top-N diversity.** De-duplication is done (`distinct_schedules`); spreading
+1. **Top-N diversity.** De-duplication is done (`distinct_schedules`); spreading
    is not. The ten distinct weeks shown are still ten variations on one shape,
    while the best 3-day and 4-day weeks sit hundreds of rows down (see Known
    gaps). Reserve slots for schedules that differ *structurally* — fewest days,
    latest start, best professor — so the list shows real alternatives rather
    than the same tradeoff ten times.
-3. **FastAPI route layer** over the existing logic.
-4. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
+2. **FastAPI route layer** over the existing logic.
+3. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
    bars, expandable AI explanation.
-5. Lazy + cached narration (generate on expand, remember the result) rather than
+4. Lazy + cached narration (generate on expand, remember the result) rather than
    narrating the whole ranked list. The per-schedule call shape already fits
    this; it needs a cache keyed on `schedule_shape`, not a restructure.
-6. Deploy, with a README containing an architecture diagram and a demo GIF.
+5. Deploy, with a README containing an architecture diagram and a demo GIF.
 
 Done since the last pass: RateMyProfessor ratings behind a `RatingProvider`
 interface, with strict name matching and Bayesian shrinkage — the professor
@@ -537,7 +550,18 @@ Ollama through one `requests` POST, since they all speak the same
 chat-completions shape, and `ClaudeNarrator` handles Anthropic. Selection is by
 whichever key `.env` supplies, free before paid, template if none. The design
 work that mattered was not the transport but deciding what the model is allowed
-to know — see the three narrator principles above.
+to know — see the narrator principles above.
+
+Then narration met a real model (Groq, free tier) and the prompt-tuning pass
+happened. The no-clock-time guard never fired, which is the design working, but
+reading the output surfaced three factual errors — all of them caused by
+leaving the model to derive something the code already knew. Fixing them was
+not prompt wording but sending `days_on_campus_count`, `fewest_days_available`,
+`biggest_sacrifice` and per-requirement `meets_on`. Output went from "your
+schedule was constrained by the need to have Professor Anasse Bari teach your
+CSCI-UA 102 course, which led to some compromises" to "CSCI-UA 102 on Friday
+because it is required to be taught by Anasse Bari; your biggest sacrifice is
+five days on campus when three was possible."
 
 ## Resume framing
 
@@ -550,4 +574,7 @@ constraint that falls out of it: the model is never given a clock time, so a
 time in its output is provably fabricated and gets rejected automatically.
 That is a verifiable safety property produced by a design decision, which is a
 better story than "we added AI." Be accurate about the limit, though —
-narration has only run against a stand-in provider so far (see Known gaps).
+narration is verified against one free provider and one model (see Known gaps).
+The prompt-tuning pass is worth telling too: three wrong outputs, every one
+caused by making the model derive a fact the code already had, and every one
+fixed by handing the fact over instead of rewording the prompt.
