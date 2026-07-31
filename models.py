@@ -25,6 +25,15 @@ def hhmm(text: str) -> int:
     return int(hours) * 60 + int(minutes)
 
 
+def clock(minutes: int) -> str:
+    """810 -> '13:30'. The inverse of hhmm, for display.
+
+    Lives here rather than in a caller because two modules now need it and
+    models.py is what owns the minutes-since-midnight representation.
+    """
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
 @dataclass(frozen=True)
 class Meeting:
     day: Day

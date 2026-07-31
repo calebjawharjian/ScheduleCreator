@@ -36,15 +36,17 @@ This project is a learning exercise as much as a deliverable. When helping:
 - System Python is PEP 668 protected (`externally-managed-environment`). Never use
   `--break-system-packages`; fix the venv instead. A broken venv gets rebuilt:
   `rm -rf venv && python3 -m venv venv && source venv/bin/activate`.
-- Dependencies: `requests`, `beautifulsoup4`, `anthropic`, `pytest`.
+- Dependencies: `requests`, `beautifulsoup4`, `anthropic`, `python-dotenv`, `pytest`.
 - **Tests:** `./venv/bin/python -m pytest` runs the offline suite (no network,
   ~1.5s). `pytest -m live` runs the checks that hit NYU's real endpoints. An
   autouse fixture makes any unmarked test that reaches the network fail, so the
   offline suite cannot silently start depending on it.
-- `ANTHROPIC_API_KEY` is exported for the planned LLM narrator (see Known
-  gaps — not built yet) and is **session-only**, so a fresh terminal loses
-  it. Moving to a `.env` + python-dotenv (gitignored) is a pending cleanup
-  regardless of narrator status.
+- **Narrator keys live in `.env`** (gitignored; copy `.env.example`), loaded by
+  `narrator.load_env()` before anything reads the environment. This replaced
+  session-only `export`s that a fresh terminal silently lost. A real export
+  still wins — `load_dotenv(override=False)`. **No key is required to run:**
+  narration falls back to deterministic summaries, so an empty `.env` is a
+  supported configuration, not a broken one.
 - **Commit and push after each session and each significant code change,**
   with a commit message describing what changed. Remote is
   `github.com/calebjawharjian/ScheduleCreator`, branch `main`.
@@ -70,6 +72,7 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `constraints.py` | `Constraint` interface + `RequiredInstructor` + `CommuteBuffer`; hard filters applied before scoring |
 | `ratings.py` | `RatingProvider` interface + `RMPRatings` (RateMyProfessor) + `NullRatings` |
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules`, `distinct_schedules` |
+| `narrator.py` | `Narrator` interface + `build_findings` + `TemplateNarrator` (deterministic) + `OpenAICompatNarrator` + `ClaudeNarrator` |
 | `main.py` | CLI entry point: argparse flags, interactive prompts when run bare, result display |
 | `tests/` | pytest suite. Offline by default; `tests/fixtures/` holds recorded responses |
 | `tests/test_live_data.py` | **Keep.** Live guards for linkage + both joins; `pytest -m live` |
@@ -87,6 +90,24 @@ independent concerns. Swapping the data source touches nothing downstream.
 - **Deterministic core, LLM narrates only.** Scoring and ranking are pure code. The
   model receives an already-decided findings dict and phrases it. It never scores,
   ranks, or judges. Keeps results reproducible, cheap, and trustworthy.
+- **The narrator is given facts it cannot get wrong.** `build_findings` hands
+  over durations, day-to-course mappings and counts — **never a clock time.**
+  The student registers against those times, so they stay deterministic in
+  `main.py`. The payoff is a check that would otherwise be impossible: since
+  findings contain no clock time, any `HH:MM` in the model's output was
+  fabricated, and `_ChatNarrator` refuses it and falls back. A test asserts
+  the no-times property of `build_findings`, because the guard is only sound
+  while it holds.
+- **Narrate relations, not properties.** "Five days on campus" is a fact a
+  template already prints; routing it through a model just paraphrases what is
+  on screen. What earns the call is *why*: which courses force each day, what
+  brackets the longest gap, which requirement pinned the result, and — via
+  `achievable`, the best score anything reached per factor — what was actually
+  given up rather than merely scored low.
+- **Narration degrades, it does not fail.** No key, no network, a bad response
+  or an invented time all fall back to `TemplateNarrator`, whose output is the
+  pre-narration format exactly. A deliberate exception to "fail loudly", which
+  governs *data*: losing commentary is not the same as getting a fact wrong.
 - **Minutes since midnight** for all times. Makes overlap detection two integer
   comparisons.
 - **Normalize every scoring factor to 0..1** before weighting, so incommensurable
@@ -415,13 +436,22 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   factor still fails to discriminate between those schedules. There is also no
   way to confirm a match is the *right* person beyond name + department; the
   strict matching reduces that risk rather than eliminating it.
-- **No narrator.py / no LLM narration exists.** The architecture and design
-  principles above describe an "LLM explanation layer with deterministic
-  fallback," and the first commit's message claims "AI narration," but no such
-  file has ever existed (confirmed via `git ls-tree` on the initial commit).
-  `anthropic` is installed and `ANTHROPIC_API_KEY` handling is documented, but
-  nothing calls it. All current output (`main.py`'s "strongest"/"biggest
-  tradeoff" lines) is deterministic string formatting.
+- **Narration has never run against a real provider.** `narrator.py` exists and
+  the whole path is verified — but with a local stand-in server, not a hosted
+  model, because no key was available when it was built. The transport, request
+  shape, response parsing, guard and fallback are all confirmed; **the quality
+  of real model output is not.** Expect the system prompt to need tuning on
+  first contact, especially "never write a clock time", which a weaker free-tier
+  model may well violate. That failure is safe (the guard falls back) but it
+  would mean losing narration rather than getting bad narration.
+- **Narration is not cached.** Every run re-narrates, so re-running the same
+  course list pays for the same prose twice. Harmless while N is 3 and the
+  provider is free; the fix is roadmap item 4, and the per-schedule call shape
+  was chosen to make it a cache rather than a rewrite.
+- **Free-tier model names drift.** `PROVIDERS` pins a default model per
+  provider and these get retired regularly. `NARRATOR_MODEL` overrides without
+  a code change; a stale default surfaces as a fallback-to-template warning,
+  not a crash.
 - **Score ties are real, and they are mostly the catalog's fault.** With six
   factors the top-10 spread for the three-course example is 0.67–0.74. On a
   four-course list, though, 78 schedules tied at the top score and covered only
@@ -457,9 +487,10 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 
 ## Next steps
 
-1. **Build `narrator.py`**, the LLM explanation layer described above — it doesn't
-   exist yet (see Known gaps). This has to land before lazy/cached narration (next
-   item) makes sense, since that step presupposes narration already exists.
+1. **Point narration at a real provider and tune the prompt.** Everything is
+   built and verified against a stand-in; put a free key in `.env` and read
+   what an actual model writes (see Known gaps). This is a prompt-quality
+   pass, not a code one.
 2. **Top-N diversity.** De-duplication is done (`distinct_schedules`); spreading
    is not. The ten distinct weeks shown are still ten variations on one shape,
    while the best 3-day and 4-day weeks sit hundreds of rows down (see Known
@@ -470,7 +501,8 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 4. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
    bars, expandable AI explanation.
 5. Lazy + cached narration (generate on expand, remember the result) rather than
-   narrating the whole ranked list.
+   narrating the whole ranked list. The per-schedule call shape already fits
+   this; it needs a cache keyed on `schedule_shape`, not a restructure.
 6. Deploy, with a README containing an architecture diagram and a demo GIF.
 
 Done since the last pass: RateMyProfessor ratings behind a `RatingProvider`
@@ -498,11 +530,24 @@ could not show it. Fixed at the display boundary rather than in ranking, so the
 core stays deterministic and every real registration option is still
 enumerated.
 
+Then `narrator.py`, which had been described in this document since the first
+commit without ever existing. Built provider-agnostic and free-first:
+`OpenAICompatNarrator` covers Groq, Gemini, OpenRouter, DeepSeek and a local
+Ollama through one `requests` POST, since they all speak the same
+chat-completions shape, and `ClaudeNarrator` handles Anthropic. Selection is by
+whichever key `.env` supplies, free before paid, template if none. The design
+work that mattered was not the transport but deciding what the model is allowed
+to know — see the three narrator principles above.
+
 ## Resume framing
 
 The strongest points to articulate: the provider abstraction (adding a university is
 one adapter), and the linked-recitation bundling, which was inferred from section
 numbering and then validated against meeting-time consistency and an independent
-department listing. The deterministic-core-plus-LLM-narrator split is the design
-principle that will govern `narrator.py` once it's built (see Next steps) — worth
-articulating as an intentional design decision, but don't claim it as shipped.
+department listing. The deterministic-core-plus-LLM-narrator split is now
+shipped rather than aspirational, and the sharpest way to tell it is the
+constraint that falls out of it: the model is never given a clock time, so a
+time in its output is provably fabricated and gets rejected automatically.
+That is a verifiable safety property produced by a design decision, which is a
+better story than "we added AI." Be accurate about the limit, though —
+narration has only run against a stand-in provider so far (see Known gaps).

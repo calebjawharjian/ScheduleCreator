@@ -1,11 +1,18 @@
 import argparse
 import sys
-from models import Day, hhmm
+import textwrap
+from models import Day, clock, hhmm
+from narrator import (build_findings, load_env, narrator_from_env,
+                      FallbackNarrator, TemplateNarrator)
 from scheduler import generate_schedules
 from scoring import (
     Preferences, rank_schedules, compare_to_ideal, distinct_schedules,
     DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
 )
+
+# Read .env before anything reads the environment. The API keys were
+# session-only exports, so a fresh terminal silently lost them.
+load_env()
 
 # Flip to False to run offline against the hand-built fixtures.
 USE_LIVE_DATA = True
@@ -71,12 +78,12 @@ def parse_args() -> argparse.Namespace:
                               "when a schedule spans campuses)")
     parser.add_argument("--no-commute", action="store_true",
                          help="ignore travel time between campuses")
+    parser.add_argument("--narrate", type=int, default=3, metavar="N",
+                         help="LLM-explain the top N schedules (default 3); "
+                              "the rest get the deterministic summary")
+    parser.add_argument("--no-narrate", action="store_true",
+                         help="deterministic summaries only, no API calls")
     return parser.parse_args()
-
-
-def _clock(minutes: int) -> str:
-    """810 -> '13:30'. Inverse of models.hhmm, for display only."""
-    return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 def format_meetings(meetings) -> str:
@@ -90,7 +97,7 @@ def format_meetings(meetings) -> str:
     parts = []
     for (start, end), days in sorted(by_slot.items()):
         day_text = " ".join(d.name.capitalize() for d in sorted(days))
-        parts.append(f"{day_text} {_clock(start)}-{_clock(end)}")
+        parts.append(f"{day_text} {clock(start)}-{clock(end)}")
     return ", ".join(parts)
 
 
@@ -352,10 +359,26 @@ if len(distinct) < len(ranked):
     print(f"{len(distinct)} distinct weeks (the rest differ only in which "
           f"interchangeable section was picked)\n")
 
+# The best score anything reached on each factor, which is what turns a
+# property into a sacrifice: five days on campus is only a trade-off if some
+# other surviving schedule managed fewer.
+achievable = {name: max(b.factors[name] for _, b in ranked)
+              for name in FACTOR_LABELS}
+
+template = TemplateNarrator()
+if args.no_narrate:
+    narrator, backend = template, "template"
+else:
+    narrator, backend = narrator_from_env()
+    if backend != "template":
+        narrator = FallbackNarrator(
+            narrator, template,
+            on_error=lambda exc: print(f"warning: narration unavailable ({exc}); "
+                                       f"using deterministic summaries\n"))
+        print(f"Narrating the top {min(args.narrate, TOP_N)} with {backend}.\n")
+
 for rank, option in enumerate(distinct[:TOP_N], 1):
     comparison = compare_to_ideal(option.breakdown, prefs)
-    best = comparison.strengths[0]
-    worst = comparison.weaknesses[0]
 
     print(f"#{rank}  score {comparison.total:.2f}  (gap from ideal {comparison.total_gap:.2f})")
     for s in sorted(option.schedule, key=lambda s: (s.course_code, s.kind)):
@@ -369,7 +392,16 @@ for rank, option in enumerate(distinct[:TOP_N], 1):
         others = option.variants - 1
         print(f"      ({others} other section combination"
               f"{'s' if others > 1 else ''} meet at these same times)")
-    print(f"      strongest: {FACTOR_LABELS[best.name]} at {best.score:.2f}")
-    print(f"      biggest tradeoff: {FACTOR_LABELS[worst.name]} "
-          f"costs {worst.weighted_gap:.2f} of the total")
+
+    # Times above are deterministic and must stay that way -- they are what
+    # you register against. Only the commentary below is model-written, and
+    # only for the first --narrate schedules, since each one costs a call.
+    findings = build_findings(option, prefs, rank=rank, achievable=achievable,
+                              requirements=requirements, compromised=compromised)
+    explanation = (narrator if rank <= args.narrate else template).narrate(findings)
+    for line in explanation.splitlines():
+        # Prose runs long; the template's lines are short and must not be
+        # re-flowed into each other, so wrap each line independently.
+        print(textwrap.fill(line, width=78, initial_indent="      ",
+                            subsequent_indent="      "))
     print()
