@@ -47,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--time-end", type=_time, default=hhmm("18:00"))
     parser.add_argument("--weight", dest="weights", type=_weight, action="append",
                          default=None, help="repeatable, e.g. --weight professor=3")
+    parser.add_argument("--no-ratings", action="store_true",
+                         help="skip RateMyProfessor lookups (offline, faster)")
     return parser.parse_args()
 
 
@@ -190,6 +192,22 @@ for course in courses:
     print(f"  {course.code}  {course.title}  ({len(course.sections)} sections)")
 print()
 
+# Ratings are resolved up front, so `scoring.py` stays pure: it receives a
+# finished {name -> rating} dict and never touches the network itself.
+professor_ratings: dict[str, float] = {}
+if not args.no_ratings:
+    from ratings import RMPRatings, department_hint
+
+    wanted = {}
+    for course in courses:
+        for s in course.sections:
+            if s.instructor:
+                wanted.setdefault(s.instructor, department_hint(s.course_code))
+    if wanted:
+        print(f"Looking up {len(wanted)} instructors on RateMyProfessor...")
+        professor_ratings = RMPRatings().ratings_for(wanted)
+        print(f"  matched {len(professor_ratings)} of {len(wanted)}\n")
+
 schedules = generate_schedules(courses)
 print(f"{len(schedules)} conflict-free schedules\n")
 if not schedules:
@@ -199,9 +217,7 @@ prefs = Preferences(
     preferred_days=preferred_days,
     time_start=time_start,
     time_end=time_end,
-    # Placeholder. Real NYU instructor names won't match these, so the
-    # professor factor will score a neutral 0.5 until we wire up real ratings.
-    professor_ratings={},
+    professor_ratings=professor_ratings,
     weights=weights,
 )
 
@@ -214,6 +230,9 @@ for rank, (sched, breakdown) in enumerate(rank_schedules(schedules, prefs)[:TOP_
     print(f"#{rank}  score {comparison.total:.2f}  (gap from ideal {comparison.total_gap:.2f})")
     for s in sorted(sched, key=lambda s: (s.course_code, s.kind)):
         who = s.instructor or "(no instructor listed)"
+        rating = professor_ratings.get(s.instructor)
+        if rating is not None:
+            who = f"{who} ({rating:.1f}/5)"
         print(f"      {s.course_code:<14} {s.section_id:<8} {s.kind.name:<10} "
               f"{format_meetings(s.meetings):<34} {who}")
     print(f"      strongest: {FACTOR_LABELS[best.name]} at {best.score:.2f}")

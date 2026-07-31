@@ -66,6 +66,7 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `cs_instructors.py` | CS dept instructor-name source |
 | `combined_instructors.py` | Merges multiple instructor sources into one for `NYUProvider` |
 | `scheduler.py` | `valid_bundles`, `has_conflict`, `generate_schedules` |
+| `ratings.py` | `RatingProvider` interface + `RMPRatings` (RateMyProfessor) + `NullRatings` |
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules` |
 | `main.py` | CLI entry point: argparse flags, interactive prompts when run bare, result display |
 | `tests/` | pytest suite. Offline by default; `tests/fixtures/` holds recorded responses |
@@ -247,6 +248,46 @@ GET https://cs.nyu.edu/dynamic/courses/schedule/?semester=fall_2026
   Useful reminder that these pages are live and a "miss" is often the
   department not having decided yet, not a broken join.
 
+### RateMyProfessor (ratings)
+
+```
+POST https://www.ratemyprofessors.com/graphql
+headers: {"Authorization": "Basic dGVzdDp0ZXN0"}   # anonymous credential the site ships
+```
+
+**No official API.** This is their internal endpoint and is very likely against
+their ToS — fine for a personal project, a real question if this ships. That is
+exactly why it lives behind `RatingProvider` in `ratings.py`; swapping in a
+licensed source or `NullRatings` touches nothing else.
+
+- **`schoolID` must be pinned.** Searching "New York University" also returns
+  NYU Wagner and NYU Los Angeles, which are separate schools with separate
+  faculty. `New York University` is `U2Nob29sLTY3NQ==`.
+- **Search by surname, not full name.** The `text` query is a loose search;
+  full names return fewer usable hits than the surname plus local filtering.
+- **This is the only inexact join in the project.** Math/CS instructors join on
+  `(course_code, section_no)`, an identifier both sides share. NYU and RMP share
+  nothing but a human name, so this is real entity matching.
+- **NYU publishes middle names, RMP usually does not** (`Hilbert Gene Locklear`
+  vs `Hilbert Locklear`), so matching uses first + last only.
+- **RMP's own data has dirty whitespace**: `firstName` values like `"Tobias  "`
+  with trailing or doubled spaces. Normalize before comparing.
+- **An unreviewed profile reports `avgRating: 0`, which is NOT a rating of zero.**
+  Scoring it as one would rank an unreviewed professor as the worst possible.
+  Sections with `numRatings == 0` are treated as unrated. There are also junk
+  profiles (`foster provost`, Business, 0 reviews) that first-name matching
+  filters out anyway.
+- **Ambiguity is refused, not guessed.** Same surname is resolved by first name;
+  a remaining tie is broken by department (`SUBJECT_DEPARTMENTS` maps `CSCI-UA`
+  to `Computer Science`); anything still ambiguous is left unrated with a
+  warning. A rating attached to the wrong person actively misranks schedules,
+  which is worse than the neutral 0.5 that no rating produces.
+- **Not every professor is on RMP.** Federico Sichetti (CSCI-UA 102) returns
+  zero candidates. Verified 9 of 10 instructors matched for
+  `["CSCI-UA 102", "MATH-UA 121"]` Fall 2026.
+- Responses are cached to `.rmp_cache.json` (gitignored) and requests are spaced
+  by a delay, since this is not a service we have permission to hammer.
+
 ### Rejected / dead ends
 
 - **Schedge** (`nyu.a1liu.com`, BUGS-NYU): stale. NYU added reCAPTCHA to its upstream
@@ -291,12 +332,12 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 
 ### Known gaps
 
-- **Professor quality is inert.** Instructor names exist for both Math and CS,
-  but `professor_ratings` is empty, so `_score_professor` returns a neutral 0.5
-  for every schedule. A factor that is constant across all candidates
-  contributes zero discrimination to the ranking; it only shifts every total
-  equally. Either wire up RateMyProfessor or set its weight to 0 in the
-  meantime.
+- **Rating coverage is partial and unverifiable.** Ratings now flow from RMP
+  (9 of 10 instructors matched on the example course list), but a professor
+  absent from RMP, unreviewed, or ambiguous is scored a neutral 0.5 — so the
+  factor still fails to discriminate between those schedules. There is also no
+  way to confirm a match is the *right* person beyond name + department; the
+  strict matching reduces that risk rather than eliminating it.
 - **No narrator.py / no LLM narration exists.** The architecture and design
   principles above describe an "LLM explanation layer with deterministic
   fallback," and the first commit's message claims "AI narration," but no such
@@ -327,27 +368,21 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 
 ## Next steps
 
-1. **RateMyProfessor integration.** No official API; maintained unofficial wrappers
-   exist around its GraphQL endpoint. Keep it behind its own `RatingProvider`-style
-   interface so the legal/ToS question stays a swappable decision. Shrink or flag
-   low-review-count ratings so a single 5-star review doesn't outrank a 4.3 with 100
-   reviews. **This is where the genuinely fuzzy entity matching lives** (catalog name
-   to RMP profile), unlike the exact Math/CS joins.
-2. **Build `narrator.py`**, the LLM explanation layer described above — it doesn't
+1. **Build `narrator.py`**, the LLM explanation layer described above — it doesn't
    exist yet (see Known gaps). This has to land before lazy/cached narration (next
    item) makes sense, since that step presupposes narration already exists.
-3. **Top-N diversity.** With a realistic course load the top ten are near-identical
+2. **Top-N diversity.** With a realistic course load the top ten are near-identical
    (see Known gaps). Collapse or spread them so the list shows real alternatives.
-4. **FastAPI route layer** over the existing logic.
-5. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
+3. **FastAPI route layer** over the existing logic.
+4. **React + TypeScript frontend**: weight sliders, ranked results, per-factor score
    bars, expandable AI explanation.
-6. Lazy + cached narration (generate on expand, remember the result) rather than
+5. Lazy + cached narration (generate on expand, remember the result) rather than
    narrating the whole ranked list.
-7. Deploy, with a README containing an architecture diagram and a demo GIF.
+6. Deploy, with a README containing an architecture diagram and a demo GIF.
 
-Done since the last pass: the Tandon block-linkage fix, multi-component bundling,
-meeting times in the output, and the pytest suite (70 offline + 7 live), which
-replaced `validate_linkage.py` and `validate_join.py`.
+Done since the last pass: RateMyProfessor ratings behind a `RatingProvider`
+interface, with strict name matching and Bayesian shrinkage — the professor
+factor now discriminates instead of returning a constant 0.5.
 
 ## Resume framing
 

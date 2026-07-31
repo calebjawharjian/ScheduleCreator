@@ -101,6 +101,31 @@ def test_live_instructor_joins_still_match(live_courses):
             f"matched an instructor")
 
 
+def test_live_rmp_schema_still_returns_the_fields_we_read():
+    """The endpoint is unofficial and unversioned. If RMP renames a field or
+    changes the search shape, every rating silently vanishes and the professor
+    factor goes quietly inert again -- exactly the state this work fixed."""
+    from ratings import RMPRatings
+
+    provider = RMPRatings(delay=0, cache_path=None, verbose=False)
+    candidates = provider._search("Korth")
+
+    assert candidates, "expected at least one candidate for a known NYU professor"
+    node = candidates[0]
+    for field in ("firstName", "lastName", "department", "avgRating", "numRatings"):
+        assert field in node, f"RMP response is missing {field}"
+
+
+def test_live_known_professor_still_matches_and_scores():
+    from ratings import RMPRatings
+
+    provider = RMPRatings(delay=0, cache_path=None, verbose=False)
+    ratings = provider.ratings_for({"Evan Korth": "Computer Science"})
+
+    assert "Evan Korth" in ratings
+    assert 0.0 <= ratings["Evan Korth"] <= 5.0
+
+
 def test_live_api_still_omits_instructors():
     """`instr` has always been empty. If NYU ever populates it, the department
     scrapers become redundant -- worth knowing immediately."""

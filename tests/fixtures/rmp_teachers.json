@@ -1,0 +1,87 @@
+{
+ "foster": [
+  {
+   "avgRating": 2.8,
+   "department": "Mathematics",
+   "firstName": "Joseph",
+   "lastName": "Foster",
+   "numRatings": 144
+  },
+  {
+   "avgRating": 0,
+   "department": "Sociology",
+   "firstName": "Mina ",
+   "lastName": "Foster",
+   "numRatings": 0
+  },
+  {
+   "avgRating": 0,
+   "department": "Business",
+   "firstName": "foster",
+   "lastName": "provost",
+   "numRatings": 0
+  }
+ ],
+ "shum": [
+  {
+   "avgRating": 3.7,
+   "department": "Mathematics",
+   "firstName": "Fanny",
+   "lastName": "Shum",
+   "numRatings": 130
+  },
+  {
+   "avgRating": 4.9,
+   "department": "Writing",
+   "firstName": "Michael",
+   "lastName": "Shum",
+   "numRatings": 47
+  }
+ ],
+ "korth": [
+  {
+   "avgRating": 3.5,
+   "department": "Computer Science",
+   "firstName": "Evan",
+   "lastName": "Korth",
+   "numRatings": 115
+  }
+ ],
+ "odeh": [
+  {
+   "avgRating": 3.1,
+   "department": "Computer Science",
+   "firstName": "Sana",
+   "lastName": "Odeh",
+   "numRatings": 71
+  }
+ ],
+ "sichetti": [],
+ "locklear": [
+  {
+   "avgRating": 2.9,
+   "department": "Computer Science",
+   "firstName": "Hilbert",
+   "lastName": "Locklear",
+   "numRatings": 70
+  }
+ ],
+ "blickhan": [
+  {
+   "avgRating": 2.3,
+   "department": "Computer Science",
+   "firstName": "Tobias ",
+   "lastName": "Blickhan",
+   "numRatings": 11
+  }
+ ],
+ "kalaycioglu": [
+  {
+   "avgRating": 4.7,
+   "department": "Mathematics",
+   "firstName": "Selin",
+   "lastName": "Kalaycioglu",
+   "numRatings": 150
+  }
+ ]
+}
