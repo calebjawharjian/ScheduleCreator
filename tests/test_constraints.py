@@ -160,9 +160,12 @@ def test_a_requirement_for_an_unrequested_course_is_vacuous(courses):
 
 
 def test_explains_a_genuine_scheduling_conflict(courses):
+    """The professor exists and matches; the sections just don't fit. A
+    different fix from a misspelling, so a different message."""
     lines = explain_unsatisfiable(courses, [RequiredInstructor("CSCI-UA 102", "Anasse Bari")])
     assert "kept 1 of 2" in lines[0]
-    assert "conflict" in lines[0]
+    assert "your other courses" in lines[0]
+    assert "spelling" not in lines[0]
 
 
 # --- extensibility -----------------------------------------------------------

@@ -66,7 +66,8 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `cs_instructors.py` | CS dept instructor-name source |
 | `combined_instructors.py` | Merges multiple instructor sources into one for `NYUProvider` |
 | `scheduler.py` | `valid_bundles`, `has_conflict`, `generate_schedules` |
-| `constraints.py` | `Constraint` interface + `RequiredInstructor`; hard filters applied before scoring |
+| `campuses.py` | NYU campus inference from school code (UA/GA Manhattan, UY/GY Brooklyn) |
+| `constraints.py` | `Constraint` interface + `RequiredInstructor` + `CommuteBuffer`; hard filters applied before scoring |
 | `ratings.py` | `RatingProvider` interface + `RMPRatings` (RateMyProfessor) + `NullRatings` |
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules` |
 | `main.py` | CLI entry point: argparse flags, interactive prompts when run bare, result display |
@@ -257,6 +258,37 @@ GET https://cs.nyu.edu/dynamic/courses/schedule/?semester=fall_2026
   Useful reminder that these pages are live and a "miss" is often the
   department not having decided yet, not a broken join.
 
+### Campus: INFERRED from the school code, not published
+
+The class-search API has **no campus, location, or building field** — checked
+across EG-UY and CSCI-UA rows for Fall 2026, all empty. Campus therefore comes
+from the school code, the half of the subject after the hyphen:
+
+```
+CSCI-UA 102 -> UA -> Washington Square      EG-UY 1004 -> UY -> Brooklyn (Tandon)
+MATH-GA 2010 -> GA -> Washington Square     MA-GY 6213 -> GY -> Brooklyn (Tandon)
+```
+
+Tandon's school codes end in `Y` (`UY` undergraduate, `GY` graduate); the
+Washington Square schools do not. Isolated in `campuses.py` so it can be
+corrected in one place, and `CommuteBuffer` takes the resolver as a parameter
+rather than importing it, so the constraint itself stays university-agnostic.
+
+- **Anything unrecognized defaults to Washington Square.** Right for the
+  overwhelming majority of codes a student combines, but NYU has other sites
+  (Shanghai, Abu Dhabi) that this does not model.
+- **A cross-campus back-to-back is not a time conflict.** Manhattan 12:15 →
+  Brooklyn 12:30 has no interval overlap, so `has_conflict` accepts it, but no
+  one can attend both. Verified against live Fall 2026 data: for
+  `["CSCI-UA 101", "EG-UY 1004"]`, 38 of 129 "conflict-free" schedules were
+  physically unattendable, including a 10-minute Brooklyn → Manhattan hop.
+- **Only transitions between classes are constrained**, never the trip to the
+  first class or home from the last. Those are the student's own time.
+- **A large buffer can still leave many schedules**, because a schedule whose
+  campuses fall on different days has no same-day transition to constrain. Not
+  a bug — an 8-hour buffer legitimately passes a Mon/Wed-Manhattan,
+  Tue/Thu-Brooklyn week.
+
 ### RateMyProfessor (ratings)
 
 ```
@@ -393,8 +425,10 @@ Done since the last pass: RateMyProfessor ratings behind a `RatingProvider`
 interface, with strict name matching and Bayesian shrinkage — the professor
 factor now discriminates instead of returning a constant 0.5. Plus
 `constraints.py`: non-negotiable requirements (`--require "CSCI-UA 102=Anasse
-Bari"`) that filter before scoring, with `RequiredInstructor` as the first
-`Constraint` and the seam in place for time/day constraints next.
+Bari"`) that filter before scoring, and `CommuteBuffer`, which rejects
+cross-campus back-to-backs that are physically unattendable. The second
+constraint needed no changes to the seam the first one established, which is
+the evidence that seam was worth building.
 
 ## Resume framing
 

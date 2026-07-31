@@ -14,6 +14,10 @@ USE_LIVE_DATA = True
 TERM_CODES = {"fall2026": "1268", "spring2026": "1264"}
 
 DEFAULT_COURSE_CODES = ["CSCI-UA 101", "CSCI-UA 102", "MATH-UA 121"]
+
+# Washington Square to Brooklyn is roughly half an hour door to door on the
+# subway or the shuttle. Only ever applied when a schedule actually spans both.
+DEFAULT_COMMUTE_MINUTES = 30
 DEFAULT_WEIGHTS = {PROFESSOR: 3, TIME: 2, DAYS: 1,
                    DAYS_ON_CAMPUS: 1, IDLE_TIME: 1, LATE_START: 1}
 
@@ -60,6 +64,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require", dest="requirements", type=_requirement,
                          action="append", default=None,
                          help='non-negotiable, e.g. --require "CSCI-UA 102=Anasse Bari"')
+    parser.add_argument("--commute-buffer", type=int, default=DEFAULT_COMMUTE_MINUTES,
+                         metavar="MINUTES",
+                         help="travel time required between campuses "
+                              f"(default {DEFAULT_COMMUTE_MINUTES}, only applied "
+                              "when a schedule spans campuses)")
+    parser.add_argument("--no-commute", action="store_true",
+                         help="ignore travel time between campuses")
     return parser.parse_args()
 
 
@@ -170,11 +181,33 @@ def prompt_for_preferences():
             requirements)
 
 
+def prompt_for_commute(campuses: set[str]) -> int:
+    """Asked only when a schedule actually spans campuses, and only after the
+    courses are loaded, since that is the first point we know."""
+    print(f"\nYour courses span two campuses: {', '.join(sorted(campuses))}.")
+    print("Back-to-back classes across them are impossible to attend.")
+
+    def parse(raw: str) -> int:
+        text = raw.strip().lower()
+        if text in {"n", "no"}:
+            return 0
+        if text in {"y", "yes"}:
+            return DEFAULT_COMMUTE_MINUTES
+        minutes = int(text)
+        if minutes < 0:
+            raise ValueError("travel time cannot be negative")
+        return minutes
+
+    return _ask("Minutes to allow for travel between them? (number, or 'no')",
+                str(DEFAULT_COMMUTE_MINUTES), parse, DEFAULT_COMMUTE_MINUTES)
+
+
 args = parse_args()
+interactive = len(sys.argv) == 1
 
 # No flags at all means an interactive run; any flag means scripted, where
 # unspecified values fall back to the same defaults as before.
-if len(sys.argv) == 1:
+if interactive:
     (course_codes, term_name, day_names, time_start, time_end, weights,
      requirements) = prompt_for_preferences()
 else:
@@ -215,6 +248,21 @@ for code in course_codes:
 print("Loaded:")
 for course in courses:
     print(f"  {course.code}  {course.title}  ({len(course.sections)} sections)")
+
+# Travel time only matters, and is only asked about, when the courses actually
+# span campuses. Detected here because this is the first point the real course
+# list is known.
+from campuses import campuses_in
+
+campuses = campuses_in(courses)
+commute_minutes = 0
+if len(campuses) > 1 and not args.no_commute:
+    if interactive:
+        commute_minutes = prompt_for_commute(campuses)
+    else:
+        commute_minutes = args.commute_buffer
+        print(f"\nCourses span {', '.join(sorted(campuses))}; requiring "
+              f"{commute_minutes} minutes between them (--no-commute to ignore).")
 print()
 
 # Ratings are resolved up front, so `scoring.py` stays pure: it receives a
@@ -241,14 +289,21 @@ if not schedules:
 # Hard requirements filter before scoring. A weight can never express "must":
 # it only makes matching schedules score well, so a non-negotiable professor
 # can still be outranked on the other factors.
+if commute_minutes > 0:
+    from constraints import CommuteBuffer
+    requirements = list(requirements) + [CommuteBuffer(commute_minutes)]
+
 if requirements:
     from constraints import satisfying, explain_unsatisfiable
 
     # A requirement naming a course you didn't request is incoherent, and left
     # as a warning it is dangerous: a typo'd course code makes the requirement
     # silently vacuous, so you get a ranked list that ignores a non-negotiable.
+    from constraints import RequiredInstructor
+
     loaded = {c.code for c in courses}
-    stray = [r for r in requirements if r.course_code not in loaded]
+    stray = [r for r in requirements
+             if isinstance(r, RequiredInstructor) and r.course_code not in loaded]
     if stray:
         raise SystemExit(
             "\n".join([f"Required {r.describe()}, but {r.course_code} is not "

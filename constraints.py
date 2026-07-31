@@ -60,6 +60,11 @@ class Constraint(ABC):
         diagnostics count only the sections a constraint actually judges."""
         return True
 
+    def explain(self, courses) -> str:
+        """Why this constraint might have eliminated everything. Overridden
+        where a constraint can say something more useful than its own name."""
+        return self.describe()
+
 
 class RequiredInstructor(Constraint):
     """Pin one course to one instructor.
@@ -94,8 +99,90 @@ class RequiredInstructor(Constraint):
     def constrains_course(self, course_code: str) -> bool:
         return _norm(course_code) == self._code
 
+    def explain(self, courses) -> str:
+        kept, total = section_survival(courses, self)
+        if total == 0:
+            return f"{self.describe()}: that course was not requested"
+        if kept == 0:
+            return (f"{self.describe()}: matched none of {total} lecture "
+                    f"sections -- check the spelling, or they may not be "
+                    f"teaching it this term")
+        return (f"{self.describe()}: kept {kept} of {total} lecture sections, "
+                f"none of which fit alongside your other courses")
+
     def describe(self) -> str:
         return f"{self.course_code} taught by {self.instructor}"
+
+
+class CommuteBuffer(Constraint):
+    """Require travel time between consecutive classes on different campuses.
+
+    A Washington Square class ending at 14:00 and a Brooklyn class starting at
+    14:00 do not *conflict* -- the intervals don't overlap, so `has_conflict`
+    is happy -- but no one can attend both. That makes this a correctness
+    filter rather than a preference, the same category as a bundle missing its
+    required lab.
+
+    Only *between* classes. The trip to campus before the first class and home
+    after the last one is the student's own time, not a scheduling problem, so
+    only consecutive pairs within a day are checked.
+
+    Takes `campus_of` as a parameter rather than importing NYU's, so this stays
+    usable by any university that can name a campus per course code.
+    """
+
+    def __init__(self, minutes: int = 30, campus_of=None):
+        self.minutes = minutes
+        if campus_of is None:
+            from campuses import campus_of as nyu_campus_of
+            campus_of = nyu_campus_of
+        self._campus_of = campus_of
+
+    def _day_timeline(self, schedule: list[Section]):
+        """Meetings grouped by day as (meeting, campus), earliest first."""
+        by_day: dict = {}
+        for section in schedule:
+            campus = self._campus_of(section.course_code)
+            for meeting in section.meetings:
+                by_day.setdefault(meeting.day, []).append((meeting, campus))
+        for day in by_day:
+            by_day[day].sort(key=lambda pair: pair[0].start)
+        return by_day
+
+    def allows(self, schedule: list[Section]) -> bool:
+        for timeline in self._day_timeline(schedule).values():
+            for (earlier, from_campus), (later, to_campus) in zip(timeline, timeline[1:]):
+                if from_campus == to_campus:
+                    continue
+                if later.start - earlier.end < self.minutes:
+                    return False
+        return True
+
+    def violations(self, schedule: list[Section]) -> list[str]:
+        """Which transitions fail, for explaining an impossible request."""
+        problems = []
+        for day, timeline in sorted(self._day_timeline(schedule).items()):
+            for (earlier, a), (later, b) in zip(timeline, timeline[1:]):
+                if a == b:
+                    continue
+                gap = later.start - earlier.end
+                if gap < self.minutes:
+                    problems.append(
+                        f"{day.name}: {a} ends {earlier.end // 60:02d}:"
+                        f"{earlier.end % 60:02d}, {b} starts "
+                        f"{later.start // 60:02d}:{later.start % 60:02d} "
+                        f"({gap} min apart, needs {self.minutes})")
+        return problems
+
+    def explain(self, courses) -> str:
+        spanned = sorted({self._campus_of(c.code) for c in courses})
+        return (f"{self.describe()}: your courses span {' and '.join(spanned)}, "
+                f"and no combination leaves {self.minutes} minutes to travel "
+                f"between back-to-back classes. Try a smaller buffer, or drop a "
+                f"course from one campus.")
+
+    def describe(self) -> str:
+        return f"{self.minutes} minutes between campuses"
 
 
 def parse_requirement(text: str) -> RequiredInstructor:
@@ -134,18 +221,7 @@ def explain_unsatisfiable(courses, constraints: list[Constraint]) -> list[str]:
 
     Reported rather than silently relaxed: a requirement the user called
     non-negotiable should never be quietly dropped just to produce results.
+    Each constraint explains itself, since "no professor by that name" and
+    "not enough travel time" have entirely different fixes.
     """
-    lines: list[str] = []
-    for constraint in constraints:
-        kept, total = section_survival(courses, constraint)
-        if total == 0:
-            lines.append(f"  {constraint.describe()}: that course was not requested")
-        elif kept == 0:
-            lines.append(f"  {constraint.describe()}: matched none of "
-                         f"{total} lecture sections -- check the spelling, or "
-                         f"they may not be teaching it this term")
-        else:
-            lines.append(f"  {constraint.describe()}: kept {kept} of {total} "
-                         f"lecture sections, all of which conflict with your "
-                         f"other courses")
-    return lines
+    return [f"  {c.explain(courses)}" for c in constraints]
