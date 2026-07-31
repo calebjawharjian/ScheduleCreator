@@ -36,6 +36,14 @@ def _weight(text: str) -> tuple[str, float]:
         raise argparse.ArgumentTypeError(f"expected a number, got {value!r}")
 
 
+def _requirement(text: str):
+    from constraints import parse_requirement
+    try:
+        return parse_requirement(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate and rank NYU schedules.")
     parser.add_argument("--course", dest="course_codes", action="append", default=None,
@@ -49,6 +57,9 @@ def parse_args() -> argparse.Namespace:
                          default=None, help="repeatable, e.g. --weight professor=3")
     parser.add_argument("--no-ratings", action="store_true",
                          help="skip RateMyProfessor lookups (offline, faster)")
+    parser.add_argument("--require", dest="requirements", type=_requirement,
+                         action="append", default=None,
+                         help='non-negotiable, e.g. --require "CSCI-UA 102=Anasse Bari"')
     return parser.parse_args()
 
 
@@ -112,6 +123,13 @@ def _parse_days(raw: str) -> list[str]:
     return names
 
 
+def _parse_requirements(raw: str) -> list:
+    from constraints import parse_requirement
+    # Comma-separates entries; '=' separates course from name, so neither
+    # a course code's space nor a professor's space is ambiguous.
+    return [parse_requirement(part) for part in raw.split(",") if part.strip()]
+
+
 def _parse_term(raw: str) -> str:
     key = raw.strip().lower()
     if key not in TERM_CODES:
@@ -133,6 +151,11 @@ def prompt_for_preferences():
     time_end = _ask("Latest acceptable end time (HH:MM)", "e.g. 18:00",
                     _time, hhmm("18:00"))
 
+    requirements = _ask(
+        "Required professors, non-negotiable (COURSE=Name, comma-separated)",
+        'none, e.g. CSCI-UA 102=Anasse Bari',
+        _parse_requirements, [])
+
     weights = dict(DEFAULT_WEIGHTS)
     answer = _ask("Customize factor weights? (y/N)", "N",
                   lambda s: s.strip().lower(), "n")
@@ -143,7 +166,8 @@ def prompt_for_preferences():
                                  str(DEFAULT_WEIGHTS[name]),
                                  float, DEFAULT_WEIGHTS[name])
     print()
-    return course_codes, term_name, days, time_start, time_end, weights
+    return (course_codes, term_name, days, time_start, time_end, weights,
+            requirements)
 
 
 args = parse_args()
@@ -151,14 +175,15 @@ args = parse_args()
 # No flags at all means an interactive run; any flag means scripted, where
 # unspecified values fall back to the same defaults as before.
 if len(sys.argv) == 1:
-    course_codes, term_name, day_names, time_start, time_end, weights = \
-        prompt_for_preferences()
+    (course_codes, term_name, day_names, time_start, time_end, weights,
+     requirements) = prompt_for_preferences()
 else:
     course_codes = args.course_codes or DEFAULT_COURSE_CODES
     term_name = args.term
     day_names = args.days
     time_start, time_end = args.time_start, args.time_end
     weights = {**DEFAULT_WEIGHTS, **dict(args.weights or [])}
+    requirements = args.requirements or []
 
 term = TERM_CODES[term_name]
 preferred_days = {Day[name] for name in day_names}
@@ -209,9 +234,34 @@ if not args.no_ratings:
         print(f"  matched {len(professor_ratings)} of {len(wanted)}\n")
 
 schedules = generate_schedules(courses)
-print(f"{len(schedules)} conflict-free schedules\n")
+print(f"{len(schedules)} conflict-free schedules")
 if not schedules:
     raise SystemExit("No valid schedules. Every combination had a time conflict.")
+
+# Hard requirements filter before scoring. A weight can never express "must":
+# it only makes matching schedules score well, so a non-negotiable professor
+# can still be outranked on the other factors.
+if requirements:
+    from constraints import satisfying, explain_unsatisfiable
+
+    # A requirement naming a course you didn't request is incoherent, and left
+    # as a warning it is dangerous: a typo'd course code makes the requirement
+    # silently vacuous, so you get a ranked list that ignores a non-negotiable.
+    loaded = {c.code for c in courses}
+    stray = [r for r in requirements if r.course_code not in loaded]
+    if stray:
+        raise SystemExit(
+            "\n".join([f"Required {r.describe()}, but {r.course_code} is not "
+                       f"in your course list." for r in stray]
+                      + [f"Requested courses: {', '.join(sorted(loaded))}"]))
+
+    schedules = satisfying(schedules, requirements)
+    print(f"{len(schedules)} of those satisfy your requirements")
+    if not schedules:
+        raise SystemExit(
+            "\nNo schedules satisfy your requirements.\n"
+            + "\n".join(explain_unsatisfiable(courses, requirements)))
+print()
 
 prefs = Preferences(
     preferred_days=preferred_days,

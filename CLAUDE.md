@@ -66,6 +66,7 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `cs_instructors.py` | CS dept instructor-name source |
 | `combined_instructors.py` | Merges multiple instructor sources into one for `NYUProvider` |
 | `scheduler.py` | `valid_bundles`, `has_conflict`, `generate_schedules` |
+| `constraints.py` | `Constraint` interface + `RequiredInstructor`; hard filters applied before scoring |
 | `ratings.py` | `RatingProvider` interface + `RMPRatings` (RateMyProfessor) + `NullRatings` |
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules` |
 | `main.py` | CLI entry point: argparse flags, interactive prompts when run bare, result display |
@@ -94,6 +95,14 @@ independent concerns. Swapping the data source touches nothing downstream.
   weight total, so `{PROFESSOR: 3, TIME: 2, DAYS: 1}` works as written.
 - **`ScoreBreakdown` returns per-factor scores, not just a total**, because the
   narrator needs the individual factors to describe pros and cons.
+- **Hard constraints filter; weights only rank.** A weight can never express
+  "must have": weights trade off against each other by construction, so
+  `professor=1000` merely makes matching schedules score well and one can still
+  lose on the other factors. This is not hypothetical — it is how a student who
+  wanted one specific CSCI professor saw him ranked near the bottom, because he
+  taught on a non-preferred day. Requirements therefore live in `constraints.py`
+  and remove candidates *before* `rank_schedules` ever sees them. Constraints
+  decide what is eligible; scoring decides what is best among the eligible.
 
 ---
 
@@ -382,7 +391,10 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 
 Done since the last pass: RateMyProfessor ratings behind a `RatingProvider`
 interface, with strict name matching and Bayesian shrinkage — the professor
-factor now discriminates instead of returning a constant 0.5.
+factor now discriminates instead of returning a constant 0.5. Plus
+`constraints.py`: non-negotiable requirements (`--require "CSCI-UA 102=Anasse
+Bari"`) that filter before scoring, with `RequiredInstructor` as the first
+`Constraint` and the seam in place for time/day constraints next.
 
 ## Resume framing
 
