@@ -50,6 +50,26 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _clock(minutes: int) -> str:
+    """810 -> '13:30'. Inverse of models.hhmm, for display only."""
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def format_meetings(meetings) -> str:
+    """'Mon Wed 12:30-13:50'. Days sharing a time slot are grouped, since a
+    lecture meeting MW at one time should read as one line, not two."""
+    if not meetings:
+        return "no meeting time"
+    by_slot: dict[tuple[int, int], list] = {}
+    for m in meetings:
+        by_slot.setdefault((m.start, m.end), []).append(m.day)
+    parts = []
+    for (start, end), days in sorted(by_slot.items()):
+        day_text = " ".join(d.name.capitalize() for d in sorted(days))
+        parts.append(f"{day_text} {_clock(start)}-{_clock(end)}")
+    return ", ".join(parts)
+
+
 def _ask(question: str, default_display: str, parse, default_value):
     """Prompt until the answer parses. A blank line accepts the default.
 
@@ -101,14 +121,14 @@ def prompt_for_preferences():
     """Interactive fallback when the program is run with no flags."""
     print("Schedule preferences (press Enter to accept each default).\n")
 
-    course_codes = _ask("Course codes, comma-separated",
+    course_codes = _ask("Course codes, comma-separated\n", "e.g. " +
                         ", ".join(DEFAULT_COURSE_CODES),
                         _parse_courses, DEFAULT_COURSE_CODES)
-    term_name = _ask("Term", "fall2026", _parse_term, "fall2026")
-    days = _ask("Preferred days", "MON WED", _parse_days, ["MON", "WED"])
-    time_start = _ask("Earliest acceptable start time (HH:MM)", "12:00",
+    term_name = _ask("Term", "e.g. fall2026", _parse_term, "fall2026")
+    days = _ask("Preferred days", "e.g. MON WED", _parse_days, ["MON", "WED"])
+    time_start = _ask("Earliest acceptable start time (HH:MM)", "e.g. 12:00",
                       _time, hhmm("12:00"))
-    time_end = _ask("Latest acceptable end time (HH:MM)", "18:00",
+    time_end = _ask("Latest acceptable end time (HH:MM)", "e.g. 18:00",
                     _time, hhmm("18:00"))
 
     weights = dict(DEFAULT_WEIGHTS)
@@ -192,9 +212,10 @@ for rank, (sched, breakdown) in enumerate(rank_schedules(schedules, prefs)[:TOP_
     worst = comparison.weaknesses[0]
 
     print(f"#{rank}  score {comparison.total:.2f}  (gap from ideal {comparison.total_gap:.2f})")
-    for s in sched:
+    for s in sorted(sched, key=lambda s: (s.course_code, s.kind)):
         who = s.instructor or "(no instructor listed)"
-        print(f"      {s.course_code:<14} {s.section_id:<8} {s.kind.name:<10} {who}")
+        print(f"      {s.course_code:<14} {s.section_id:<8} {s.kind.name:<10} "
+              f"{format_meetings(s.meetings):<34} {who}")
     print(f"      strongest: {FACTOR_LABELS[best.name]} at {best.score:.2f}")
     print(f"      biggest tradeoff: {FACTOR_LABELS[worst.name]} "
           f"costs {worst.weighted_gap:.2f} of the total")

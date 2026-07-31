@@ -7,21 +7,33 @@ def valid_bundles(course: Course) -> list[list[Section]]:
     """Every legal way to register for a single course.
 
     A bundle is the set of sections you sign up for together. For a plain
-    lecture course that is just [lecture]. For a course with tied
-    recitations, it is [lecture, recitation] for each recitation option.
+    lecture course that is just [lecture]. For a course with tied sections it
+    is the lecture plus **one of each component type** it offers, because a
+    course can require several at once: EG-UY 1004 needs a lecture *and* a lab
+    *and* a recitation, not a lecture plus one of them.
+
+    Grouping by kind before taking the product is what makes that work. Treating
+    every non-lecture as an interchangeable alternative produces bundles that
+    are missing a required component and cannot actually be registered.
     """
     bundles: list[list[Section]] = []
 
     for lecture in course.lectures():
-        recitations = course.recitations_for(lecture.section_id)
+        linked = course.recitations_for(lecture.section_id)
 
-        if not recitations:
+        if not linked:
             # No tied section, so the lecture by itself is a complete bundle.
             bundles.append([lecture])
-        else:
-            # One bundle per recitation choice for this lecture.
-            for recitation in recitations:
-                bundles.append([lecture, recitation])
+            continue
+
+        by_kind: dict[int, list[Section]] = {}
+        for section in linked:
+            by_kind.setdefault(section.kind, []).append(section)
+
+        # Sorted by kind so bundle order is deterministic run to run.
+        options = [by_kind[kind] for kind in sorted(by_kind)]
+        for combo in itertools.product(*options):
+            bundles.append([lecture, *combo])
 
     return bundles
 

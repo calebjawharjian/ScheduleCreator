@@ -63,8 +63,8 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `combined_instructors.py` | Merges multiple instructor sources into one for `NYUProvider` |
 | `scheduler.py` | `valid_bundles`, `has_conflict`, `generate_schedules` |
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules` |
-| `main.py` | CLI entry point: argparse flags for course codes, term, and preferences |
-| `validate_linkage.py` | **Keep.** Guards the recitation-linkage assumption |
+| `main.py` | CLI entry point: argparse flags, interactive prompts when run bare, result display |
+| `validate_linkage.py` | **Keep.** Guards both linkage strategies: overlap + block-stem checks |
 | `validate_join.py` | **Keep.** Guards both instructor-source joins (Math + CS) |
 
 ### Design principles established
@@ -137,14 +137,34 @@ endpoint does not solve linkage or instructors. Useful later for prerequisites.
 
 ### Recitation linkage: INFERRED, not published
 
-NYU publishes no lecture-to-recitation relationship anywhere. The heuristic:
+NYU publishes no lecture-to-recitation relationship anywhere. **Two numbering
+schemes exist and they need two different strategies.** Both live in
+`nyu_provider._link_sections`.
+
+**1. Stem-based (Tandon).** Sections are named block stem + component code:
+`A1LC` is the lecture of block `A1`, `A1LB` its lab, `A1RC` its recitation.
+The block is named explicitly, so linkage is a dictionary lookup and ordering
+is irrelevant. Used only when *every* section in the course parses as a stem,
+so mixed/unknown numbering falls back rather than half-applying a scheme.
+
+**2. Sequential (CAS).** Numeric sections (`001` lecture, `002`-`005`
+recitations) name no block, so the heuristic is:
 
 > Sections sorted by number form blocks. Each `LEC` starts a block, and every
 > following non-lecture section belongs to it until the next `LEC`.
 
-Implemented in `nyu_provider.get_courses` with `current_lecture_id`, and clearly
-commented as a replaceable assumption. Sorting must be **numeric** (`_section_order`
-extracts digits), because the API returns rows out of order.
+Sorting must be **numeric** (`_section_order` extracts digits), because the API
+returns rows out of order.
+
+**Why the split is mandatory, not cosmetic.** Applying the sequential scan to
+Tandon numbering is silently and catastrophically wrong: `A1LB` sorts *before*
+`A1LC` (same digits, so lexicographic order decides, and `LB` < `LC`), so every
+lab gets attached to the **previous** block's lecture — `B1LB → A1LC`,
+`C1LB → B1LC` — and the very first lab, having no preceding lecture, is orphaned
+and silently dropped from every bundle. This shipped undetected because the
+`validate_linkage.py` overlap test cannot see it: `B1LB` (Wed 08:00-10:50) does
+not overlap `A1LC` (Mon 12:30-13:50), so nothing collides. This is exactly the
+blind spot the caveat below warned about, found in the wild on EG-UY 1004.
 
 Evidence supporting it:
 - MATH-UA 121 Fall 2026: 7 lectures at sections 001, 006, 011, 016, 021, 026, 031,
@@ -159,7 +179,11 @@ Evidence supporting it:
   nothing of this inference.
 
 Caveat to keep in mind: most recitations meet Friday while lectures do not, so a
-mislink between two Friday-free lectures could still escape detection. Run
+mislink between two Friday-free lectures could still escape detection by the
+overlap test alone. `validate_linkage.py` now also checks that a section's block
+stem matches its parent lecture's stem, which catches cross-block mislinks
+regardless of meeting times — but only where sections are stem-numbered. For CAS
+numeric sections the overlap test is still the only guard. Run
 `validate_linkage.py` whenever a new department is added.
 
 ### Math department instructor source (Courant)
@@ -210,9 +234,11 @@ GET https://cs.nyu.edu/dynamic/courses/schedule/?semester=fall_2026
 - No co-taught/multi-instructor sections found in this snapshot, so — like
   Courant — one name per section is enough.
 - The join is **exact** on `(course_code, section_no)`, same shape as the Math
-  source. Verified 24 of 25 lectures matched across MATH-UA 121, MATH-UA 122,
-  CSCI-UA 101, and CSCI-UA 102 (Fall 2026); the one miss (CSCI-UA 102 sec 010)
-  is a genuine `TBA` on the department page, not a join failure.
+  source. Verified 25 of 25 lectures matched across MATH-UA 121, MATH-UA 122,
+  CSCI-UA 101, and CSCI-UA 102 (Fall 2026). It was 24 of 25 when first built —
+  CSCI-UA 102 sec 010 read `TBA` and has since been filled in with a real name.
+  Useful reminder that these pages are live and a "miss" is often the
+  department not having decided yet, not a broken join.
 
 ### Rejected / dead ends
 
@@ -243,6 +269,18 @@ conflict-free schedules, with both Math and CS lecture instructors populated.
 Course codes, term, preferred days, time window, and factor weights are all
 CLI flags on `main.py` now (`--course`, `--term`, `--days`, `--time-start`/
 `--time-end`, `--weight`); only `professor_ratings` is still hardcoded empty.
+Running `main.py` with **no flags** prompts for each of those interactively
+instead (blank line accepts the shown default, bad input re-prompts).
+
+Multi-component courses work: `EG-UY 1004` (lecture + lab + recitation) yields
+25 bundles, 24 with all three components and one with lecture+lab, matching a
+block that genuinely has no recitation.
+
+Each section prints its meeting days and times alongside the CRN and
+instructor. That is deliberate and should stay deterministic even once
+`narrator.py` exists: times are facts the user registers against, so they must
+never depend on an LLM phrasing them correctly. The narrator's job is the
+tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 
 ### Known gaps
 
@@ -269,10 +307,11 @@ CLI flags on `main.py` now (`--course`, `--term`, `--days`, `--time-start`/
   contribute nothing to day/time factors, which can inflate their schedules' scores.
 - **Course-wide recitations** (`parent_section_id = None`, pairing with any lecture)
   are not handled.
-- **Lecture requiring both a lab and a recitation** is not handled;
-  `valid_bundles` currently treats each non-lecture as a standalone alternative
-  rather than taking a cartesian product across component types. This is the case
-  that reportedly crashes other NYU schedulers.
+- **Schedule counts explode with large-enrollment courses.** EXPOS-UA 1 alone has
+  86 sections, so a four-course list produces ~115k schedules and the top 10 are
+  near-duplicates differing only in which of the interchangeable sections was
+  picked. Ranking still works, but the output is repetitive; some form of
+  de-duplication or diversity in the top-N is worth doing before the UI lands.
 
 ---
 

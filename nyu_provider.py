@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import re
 import requests
 
 from models import Course, Section, SectionKind, Meeting, Day
@@ -14,6 +15,17 @@ KIND_MAP = {
     "RCT": SectionKind.RECITATION,
     "LAB": SectionKind.LAB,
 }
+
+# Tandon numbers sections as block stem + component code: 'A1LC' is the lecture
+# of block A1, 'A1LB' its lab, 'A1RC' its recitation. The stem is the real
+# grouping key, and it does not depend on ordering the way CAS numbering does.
+BLOCK_STEM_RE = re.compile(r"([A-Z]+\d+)[A-Z]{2}")
+
+
+def _block_stem(section_no: str | None) -> str | None:
+    """'A1LB' -> 'A1'. None for CAS-style numeric sections like '001'."""
+    match = BLOCK_STEM_RE.fullmatch(section_no or "")
+    return match.group(1) if match else None
 
 
 def _subject_of(course_code: str) -> str:
@@ -71,6 +83,51 @@ class NYUProvider(CourseProvider):
         digits = "".join(c for c in no if c.isdigit())
         return (int(digits) if digits else 0, no)
 
+    def _link_sections(self, code: str, usable: list[dict]) -> dict[str, str | None]:
+        """Map each non-lecture section's CRN to the CRN of its lecture.
+
+        Two numbering schemes need two strategies:
+
+        * **Stem-based** (Tandon: 'A1LC' lecture, 'A1LB' lab, 'A1RC' recitation).
+          The block is named explicitly, so linkage is a lookup and ordering is
+          irrelevant. Required here: the component suffixes sort 'A1LB' before
+          'A1LC', so a sequential scan attaches every lab to the *previous*
+          block's lecture, silently and undetectably.
+        * **Sequential** (CAS: '001' lecture, '002'-'005' recitations). No block
+          is named, so a lecture starts a block and the following non-lectures
+          belong to it. Still an inference; see validate_linkage.py.
+
+        Stems are used only when *every* section has one, so a course with mixed
+        or unrecognized numbering falls back rather than half-applying a scheme.
+        """
+        stems = {row["crn"]: _block_stem(row.get("no")) for row in usable}
+        parents: dict[str, str | None] = {}
+
+        if usable and all(stems.values()):
+            lecture_by_stem: dict[str, str] = {}
+            for row in usable:
+                if KIND_MAP[row["schd"]] == SectionKind.LECTURE:
+                    lecture_by_stem[stems[row["crn"]]] = row["crn"]
+            for row in usable:
+                if KIND_MAP[row["schd"]] != SectionKind.LECTURE:
+                    parents[row["crn"]] = lecture_by_stem.get(stems[row["crn"]])
+        else:
+            current_lecture_id: str | None = None
+            for row in usable:
+                if KIND_MAP[row["schd"]] == SectionKind.LECTURE:
+                    current_lecture_id = row["crn"]
+                else:
+                    parents[row["crn"]] = current_lecture_id
+
+        for row in usable:
+            if KIND_MAP[row["schd"]] == SectionKind.LECTURE:
+                continue
+            if parents.get(row["crn"]) is None:
+                print(f"warning: {code} section {row.get('no')} "
+                      f"({row['schd']}) has no lecture to link to; unlinked")
+
+        return parents
+
     def get_courses(self, term: str, course_codes: list[str]) -> list[Course]:
         wanted = set(course_codes)
         subjects = {_subject_of(code) for code in wanted}
@@ -89,32 +146,27 @@ class NYUProvider(CourseProvider):
             course = Course(code=code, title=course_rows[0].get("title", ""))
             course_rows.sort(key=self._section_order)
 
-            current_lecture_id: str | None = None
+            usable: list[dict] = []
             for row in course_rows:
                 schd = row.get("schd", "")
                 if schd not in KIND_MAP:
                     print(f"warning: skipping unknown section type {schd!r} "
                           f"for {code} section {row.get('no')}")
                     continue
+                usable.append(row)
 
-                kind = KIND_MAP[schd]
-                parent = None
-                if kind == SectionKind.LECTURE:
-                    current_lecture_id = row["crn"]
-                else:
-                    parent = current_lecture_id
-                    if parent is None:
-                        print(f"warning: {code} section {row.get('no')} "
-                              f"({schd}) appears before any lecture; unlinked")
+            parents = self._link_sections(code, usable)
 
+            for row in usable:
+                kind = KIND_MAP[row["schd"]]
                 course.sections.append(Section(
                     section_id=row["crn"],
                     course_code=code,
                     kind=kind,
                     instructor=row.get("instr") or None,
                     meetings=_parse_meetings(row.get("meetingTimes", "")),
-                    parent_section_id=parent,
-                    section_no=row.get("no"),          # <-- added
+                    parent_section_id=parents.get(row["crn"]),
+                    section_no=row.get("no"),
                 ))
 
             courses[code] = course
