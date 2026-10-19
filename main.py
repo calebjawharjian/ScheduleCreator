@@ -19,7 +19,7 @@ load_env()
 USE_LIVE_DATA = True
 
 # Friendly names on the CLI, translated to NYU's opaque internal srcdb codes.
-TERM_CODES = {"fall2026": "1268", "spring2026": "1264"}
+TERM_CODES = {"fall2026": "1268", "spring2026": "1264", "spring2027": "1274"}
 
 DEFAULT_COURSE_CODES = ["CSCI-UA 101", "CSCI-UA 102", "MATH-UA 121"]
 

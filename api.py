@@ -40,7 +40,7 @@ from scoring import (
 
 load_env()
 
-TERM_CODES = {"fall2026": "1268", "spring2026": "1264"}
+TERM_CODES = {"fall2026": "1268", "spring2026": "1264", "spring2027": "1274"}
 DEFAULT_WEIGHTS = {PROFESSOR: 3, TIME: 2, DAYS: 1,
                    DAYS_ON_CAMPUS: 1, IDLE_TIME: 1, LATE_START: 1}
 
@@ -110,7 +110,7 @@ class AlternativeOut(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    term: Literal["fall2026", "spring2026"] = "fall2026"
+    term: Literal["fall2026", "spring2026", "spring2027"] = "fall2026"
     courses: list[str] = Field(min_length=1)
 
 

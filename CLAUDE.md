@@ -201,7 +201,11 @@ POST https://bulletins.nyu.edu/class-search/api/?page=fose&route=search&subject=
 body: {"other": {"srcdb": "1268"}, "criteria": [{"field": "subject", "value": "CSCI-UA"}]}
 ```
 
-- **Term codes (`srcdb`):** `1268` = Fall 2026, `1264` = Spring 2026. The value
+- **Term codes (`srcdb`):** `1268` = Fall 2026, `1264` = Spring 2026, `1274` =
+  Spring 2027 (`12YS`: year, then season digit 2 Jan / 4 Spring / 6 Summer /
+  8 Fall). A term can be queryable before it appears in the search page's
+  dropdown — `1274` served data while the dropdown still stopped at January
+  2027 — so probe the API rather than trusting the form. The value
   `9999` is a "default/all" sentinel that returns far more rows; always pass an
   explicit term.
 - **Searches by subject, not by course.** Derive subjects from requested course

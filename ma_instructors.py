@@ -7,7 +7,7 @@ URL = "https://math.nyu.edu/dynamic/courses/course-schedules/"
 HEADERS = {"User-Agent": "ScheduleCreator/0.1 (personal project)"}
 
 # Our internal term codes mapped to Courant's semester slugs.
-TERM_SLUGS = {"1268": "fall-2026", "1264": "spring-2026"}
+TERM_SLUGS = {"1268": "fall-2026", "1264": "spring-2026", "1274": "spring-2027"}
 
 # 'MATH-UA.0121-001' -> ('MATH-UA', '0121', '001'). Using search() means the
 # first code wins on cross-listed rows like 'MATH-GA.2010-001 CSCI-GA 2420.001'.

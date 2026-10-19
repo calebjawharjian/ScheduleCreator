@@ -8,7 +8,7 @@ HEADERS = {"User-Agent": "ScheduleCreator/0.1 (personal project)"}
 
 # Our internal term codes mapped to the CS department's semester slugs.
 # Note the underscore, unlike Courant's dashed 'fall-2026'.
-TERM_SLUGS = {"1268": "fall_2026", "1264": "spring_2026"}
+TERM_SLUGS = {"1268": "fall_2026", "1264": "spring_2026", "1274": "spring_2027"}
 
 # 'CSCI-UA.0101-001' -> ('CSCI-UA', '0101', '001'). Same shape as Courant's
 # catalog format, so the same search()-wins-on-cross-listings logic applies.
