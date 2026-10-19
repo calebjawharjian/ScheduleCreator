@@ -113,6 +113,27 @@ def test_an_unbundleable_course_is_named_not_reported_as_zero(client, monkeypatc
     assert "MATH-UA 121" in response.json()["detail"]
 
 
+def test_an_upstream_failure_is_a_readable_502_the_browser_can_see(
+        client, provider, monkeypatch):
+    """Regression from the deployed instance: NYU's search failing raised
+    straight out of /generate. An unhandled exception is answered outside the
+    CORS middleware, so the 500 carried no allow-origin header and the browser
+    reported only "Failed to fetch" -- for every request, whatever the cause."""
+    import requests
+
+    def refused(term, codes):
+        raise requests.HTTPError("403 Client Error: Forbidden")
+
+    monkeypatch.setattr(provider, "get_courses", refused)
+    origin = api.ALLOWED_ORIGINS[0]
+    response = client.post("/generate", headers={"Origin": origin},
+                           json={"term": "spring2027", "courses": ["CM-UY 1001"]})
+
+    assert response.status_code == 502
+    assert "403" in response.json()["detail"]
+    assert response.headers["access-control-allow-origin"] == origin
+
+
 def test_generate_rejects_an_unknown_term(client):
     assert client.post("/generate", json={"term": "winter2026",
                                           "courses": ["MATH-UA 121"]}).status_code == 422

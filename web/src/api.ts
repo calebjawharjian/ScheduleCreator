@@ -5,10 +5,12 @@ import type {
 const BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
 /**
- * fetch() only rejects when no HTTP response arrived at all, and the browser's
- * own message for that is a bare "Failed to fetch". Name the API and the usual
- * causes instead. Aborts are rethrown untouched: callers cancel stale /rank
- * requests on purpose and must still recognise them.
+ * fetch() rejects when the browser got no response it may read: the API is
+ * down or asleep, the origin isn't allowed, or the server crashed outright (an
+ * unhandled 500 carries no CORS header, so it is hidden too). The browser's
+ * own message for all of these is a bare "Failed to fetch"; name the API and
+ * the usual causes instead. Aborts are rethrown untouched: callers cancel
+ * stale /rank requests on purpose and must still recognise them.
  */
 async function reach(url: string, init?: RequestInit): Promise<Response> {
   try {
@@ -16,9 +18,10 @@ async function reach(url: string, init?: RequestInit): Promise<Response> {
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new Error(
-      `Couldn't reach the scheduler API at ${BASE}. It may be stopped or ` +
-      `still waking up (a free Render instance can take about a minute), ` +
-      `or it isn't allowing this site's origin. Try again shortly.`);
+      `No usable response from the scheduler API at ${BASE}. It may be ` +
+      `stopped or still waking up (a free Render instance can take about a ` +
+      `minute), it may not allow this site's origin, or it may have crashed ` +
+      `on this request (check the API's logs).`);
   }
 }
 

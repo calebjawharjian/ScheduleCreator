@@ -24,6 +24,7 @@ from dataclasses import dataclass
 import os
 from typing import Literal
 
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -226,7 +227,15 @@ def generate(request: GenerateRequest) -> GenerateResponse:
     if key not in store.generations:
         provider = NYUProvider(
             instructors=CombinedInstructors(MAInstructors(), CSInstructors()))
-        courses = provider.get_courses(term, request.courses)
+        try:
+            courses = provider.get_courses(term, request.courses)
+        except requests.RequestException as exc:
+            # Raised, not left to crash: an unhandled exception is answered by
+            # Starlette's outermost middleware, *outside* CORS, so the 500 has
+            # no allow-origin header and the browser reports only "Failed to
+            # fetch". That hid this failure on the deployed instance.
+            raise HTTPException(
+                502, f"NYU's class search request failed: {exc}") from exc
         if not courses:
             raise HTTPException(404, "no sections found for any requested course")
         stuck = unbundleable(courses)
