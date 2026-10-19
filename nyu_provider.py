@@ -137,6 +137,10 @@ class NYUProvider(CourseProvider):
         lectures = [row for row in usable
                     if KIND_MAP[row["schd"]] == SectionKind.LECTURE]
 
+        if self._blocks(usable):
+            # No lecture exists to link to, by design; `_blocks` groups them.
+            return parents
+
         if len(lectures) == 1:
             only = lectures[0]["crn"]
             for row in usable:
@@ -166,6 +170,25 @@ class NYUProvider(CourseProvider):
                       f"({row['schd']}) has no lecture to link to; unlinked")
 
         return parents
+
+    def _blocks(self, usable: list[dict]) -> dict[str, str]:
+        """CRN -> block stem, for a course with no lecture at all.
+
+        CM-UY 1001 (chem lab) is seven blocks of 'A1LB' lab + 'A1RC'
+        recitation; its lecture is a separate course, CM-UY 1003. With nothing
+        to link to, every section used to be dropped as an orphan, the course
+        had no bundles, and any list containing it produced 0 schedules.
+
+        Only stem numbering qualifies, for the same reason as in
+        `_link_sections`: the block is named, so this is a lookup. A lectureless
+        course with numeric sections names no block, so it is left ungrouped
+        and reported by `scheduler.unbundleable` rather than guessed at.
+        """
+        if not usable or any(KIND_MAP[row["schd"]] == SectionKind.LECTURE
+                             for row in usable):
+            return {}
+        stems = {row["crn"]: _block_stem(row.get("no")) for row in usable}
+        return stems if all(stems.values()) else {}
 
     def get_courses(self, term: str, course_codes: list[str]) -> list[Course]:
         wanted = set(course_codes)
@@ -197,6 +220,7 @@ class NYUProvider(CourseProvider):
                 usable.append(row)
 
             parents = self._link_sections(code, usable)
+            blocks = self._blocks(usable)
 
             for row in usable:
                 kind = KIND_MAP[row["schd"]]
@@ -210,6 +234,7 @@ class NYUProvider(CourseProvider):
                     section_no=row.get("no"),
                     campus=(BROOKLYN if row["crn"] in brooklyn_crns
                             else WASHINGTON_SQUARE),
+                    block_id=blocks.get(row["crn"]),
                 ))
 
             courses[code] = course

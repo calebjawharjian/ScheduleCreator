@@ -256,6 +256,17 @@ mislink but a **missing component**: the course bundled as lecture-only, so the
 tool offered a schedule that cannot be registered. Fixing it took that course
 list from 105 conflict-free schedules to 246.
 
+**0b. No lecture at all — group by block.** Found on **CM-UY 1001** (Spring
+2027), the chem lab: seven blocks of lab `A1LB` + recitation `A1RC`, with the
+lecture living in a *separate course*, CM-UY 1003. Every section was dropped
+as an orphan, `valid_bundles` (which anchors on lectures) returned nothing,
+and since a schedule takes one bundle per course, **every** list containing it
+silently produced 0 schedules. Now `_blocks` sets `Section.block_id` from the
+stem and `valid_bundles` takes one of each kind per block. Stem numbering only:
+a lectureless course with numeric sections names no block, so it is not
+guessed at — `scheduler.unbundleable` names it and the API returns a 422
+instead of a bare zero. Took the reporting course list from 0 schedules to 114.
+
 **1. Stem-based (Tandon).** Sections are named block stem + component code:
 `A1LC` is the lecture of block `A1`, `A1LB` its lab, `A1RC` its recitation.
 The block is named explicitly, so linkage is a dictionary lookup and ordering

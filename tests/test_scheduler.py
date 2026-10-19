@@ -1,5 +1,5 @@
 from models import Course, Day, Meeting, Section, SectionKind, hhmm
-from scheduler import valid_bundles, has_conflict, generate_schedules
+from scheduler import valid_bundles, has_conflict, generate_schedules, unbundleable
 
 
 def m(day, start, end):
@@ -46,6 +46,29 @@ def test_bundles_cover_every_lecture():
     r = section("R1", SectionKind.RECITATION, parent="L2")
     bundles = valid_bundles(Course("X 1", "", [a, b, r]))
     assert [a] in bundles and [b, r] in bundles
+
+
+def test_lectureless_course_takes_one_of_each_kind_per_block():
+    """A lab never pairs with another block's recitation: the block is what
+    NYU registers together, so crossing blocks would be unregistrable."""
+    lab_a = Section("BA", "X 1", SectionKind.LAB, None, block_id="A1")
+    rec_a = Section("RA", "X 1", SectionKind.RECITATION, None, block_id="A1")
+    lab_b = Section("BB", "X 1", SectionKind.LAB, None, block_id="B1")
+    rec_b = Section("RB", "X 1", SectionKind.RECITATION, None, block_id="B1")
+
+    bundles = valid_bundles(Course("X 1", "", [lab_a, rec_a, lab_b, rec_b]))
+
+    assert bundles == [[rec_a, lab_a], [rec_b, lab_b]]
+
+
+def test_unbundleable_names_the_course_that_empties_every_schedule():
+    """One course with no bundle makes the cartesian product empty. That must
+    be reported by name rather than surface as a bare '0 schedules'."""
+    fine = Course("X 1", "", [section("L1", SectionKind.LECTURE)])
+    stuck = Course("Y 1", "", [section("R1", SectionKind.RECITATION)])
+
+    assert unbundleable([fine, stuck]) == ["Y 1"]
+    assert generate_schedules([fine, stuck]) == []
 
 
 def test_has_conflict_detects_overlap_across_sections():

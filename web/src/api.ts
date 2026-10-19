@@ -4,9 +4,27 @@ import type {
 
 const BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
+/**
+ * fetch() only rejects when no HTTP response arrived at all, and the browser's
+ * own message for that is a bare "Failed to fetch". Name the API and the usual
+ * causes instead. Aborts are rethrown untouched: callers cancel stale /rank
+ * requests on purpose and must still recognise them.
+ */
+async function reach(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new Error(
+      `Couldn't reach the scheduler API at ${BASE}. It may be stopped or ` +
+      `still waking up (a free Render instance can take about a minute), ` +
+      `or it isn't allowing this site's origin. Try again shortly.`);
+  }
+}
+
 /** Surfaces FastAPI's error detail instead of a bare status code. */
 async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`${BASE}${path}`, {
+  const response = await reach(`${BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -30,7 +48,7 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
 }
 
 export async function fetchMetadata(): Promise<Metadata> {
-  const response = await fetch(`${BASE}/factors`);
+  const response = await reach(`${BASE}/factors`);
   if (!response.ok) throw new Error("could not reach the scheduler API");
   return response.json();
 }

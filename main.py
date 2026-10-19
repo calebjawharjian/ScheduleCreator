@@ -4,7 +4,7 @@ import textwrap
 from models import Day, clock, hhmm
 from narrator import (build_findings, load_env, narrator_from_env,
                       FallbackNarrator, TemplateNarrator)
-from scheduler import generate_schedules
+from scheduler import generate_schedules, unbundleable
 from scoring import (
     Preferences, rank_schedules, compare_to_ideal, distinct_schedules,
     diverse_top,
@@ -247,6 +247,10 @@ courses = provider.get_courses(term, course_codes)
 # Loud failure beats a silent empty result.
 if not courses:
     raise SystemExit("No courses came back. Check the codes and term.")
+stuck = unbundleable(courses)
+if stuck:
+    raise SystemExit(f"Can't build a registrable set of sections for "
+                     f"{', '.join(stuck)}, so no schedule can include it.")
 
 found = {c.code for c in courses}
 for code in course_codes:

@@ -32,7 +32,7 @@ from campuses import campuses_in
 from constraints import CommuteBuffer, RequiredInstructor, best_effort
 from models import Day, Section, clock, hhmm
 from narrator import build_findings, load_env, narrator_from_env, TemplateNarrator
-from scheduler import generate_schedules
+from scheduler import generate_schedules, unbundleable
 from scoring import (
     DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
     Preferences, compare_to_ideal, distinct_schedules, diverse_top, rank_schedules,
@@ -229,6 +229,11 @@ def generate(request: GenerateRequest) -> GenerateResponse:
         courses = provider.get_courses(term, request.courses)
         if not courses:
             raise HTTPException(404, "no sections found for any requested course")
+        stuck = unbundleable(courses)
+        if stuck:
+            raise HTTPException(
+                422, f"can't build a registrable set of sections for "
+                     f"{', '.join(stuck)}, so no schedule can include it")
 
         wanted: dict[str, InstructorHint] = {}
         for course in courses:

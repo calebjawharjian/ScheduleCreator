@@ -45,8 +45,7 @@ export default function App() {
         setMeta(m);
         setTiers(defaultTiers(m.factors.map((f) => f.name)));
       })
-      .catch(() => setApiError(
-        "Cannot reach the API. Start it with: ./venv/bin/python -m uvicorn api:app"));
+      .catch((error: Error) => setApiError(error.message));
   }, []);
 
   const onGenerate = async () => {

@@ -61,6 +61,10 @@ class Section:
     # MATH-UA sections meet in Brooklyn while the rest are at Washington Square.
     # None means unknown or not location-bound (online, abroad).
     campus: str | None = None
+    # Groups sections that register together in a course with no lecture to
+    # anchor them: CM-UY 1001 is lab 'A1LB' + recitation 'A1RC', block 'A1'.
+    # Unused when the course has a lecture -- parent_section_id does that job.
+    block_id: str | None = None
 
 
 @dataclass

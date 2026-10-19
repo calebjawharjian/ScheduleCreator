@@ -15,6 +15,12 @@ def valid_bundles(course: Course) -> list[list[Section]]:
     Grouping by kind before taking the product is what makes that work. Treating
     every non-lecture as an interchangeable alternative produces bundles that
     are missing a required component and cannot actually be registered.
+
+    A course with no lecture at all (CM-UY 1001: lab + recitation blocks, its
+    lecture is the separate course CM-UY 1003) is anchored on `block_id`
+    instead: each block contributes one of each component it offers. A
+    lectureless section with no block cannot be placed and is left out, so a
+    course made only of those yields no bundles -- see `unbundleable`.
     """
     bundles: list[list[Section]] = []
 
@@ -26,16 +32,41 @@ def valid_bundles(course: Course) -> list[list[Section]]:
             bundles.append([lecture])
             continue
 
-        by_kind: dict[int, list[Section]] = {}
-        for section in linked:
-            by_kind.setdefault(section.kind, []).append(section)
-
-        # Sorted by kind so bundle order is deterministic run to run.
-        options = [by_kind[kind] for kind in sorted(by_kind)]
-        for combo in itertools.product(*options):
+        for combo in _one_of_each_kind(linked):
             bundles.append([lecture, *combo])
 
+    if not course.lectures():
+        blocks: dict[str, list[Section]] = {}
+        for section in course.sections:
+            if section.block_id is not None:
+                blocks.setdefault(section.block_id, []).append(section)
+        for block_id in sorted(blocks):
+            bundles.extend(list(combo)
+                           for combo in _one_of_each_kind(blocks[block_id]))
+
     return bundles
+
+
+def _one_of_each_kind(sections: list[Section]):
+    """Every way to pick exactly one section of each kind present."""
+    by_kind: dict[int, list[Section]] = {}
+    for section in sections:
+        by_kind.setdefault(section.kind, []).append(section)
+
+    # Sorted by kind so bundle order is deterministic run to run.
+    options = [by_kind[kind] for kind in sorted(by_kind)]
+    return itertools.product(*options)
+
+
+def unbundleable(courses: list[Course]) -> list[str]:
+    """Codes of courses with no registrable bundle.
+
+    Any one of these makes every schedule impossible, since a schedule takes a
+    bundle from each course. Without this check that surfaced as "0
+    schedules" with no reason given -- the silent-default failure this
+    project keeps paying for.
+    """
+    return [course.code for course in courses if not valid_bundles(course)]
 
 def has_conflict(sections: list[Section]) -> bool:
     """True if any two meetings among these sections overlap in time."""

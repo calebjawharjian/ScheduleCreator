@@ -21,21 +21,27 @@ PAGES = {
 }
 
 FALL_2026 = "1268"
+SPRING_2027 = "1274"
+
+# Recorded subjects per term. CM-UY is Spring 2027 because that is where its
+# lectureless lab course (CM-UY 1001) was found.
+RECORDED = {FALL_2026: ("MATH-UA", "CSCI-UA", "EG-UY", "CS-UY"),
+            SPRING_2027: ("CM-UY",)}
 
 
-def load_rows(subject: str) -> list[dict]:
+def load_rows(subject: str, term: str = FALL_2026) -> list[dict]:
     """Recorded class-search rows for one subject, as the API returned them."""
-    return json.loads((FIXTURES / f"search_{subject}_{FALL_2026}.json").read_text())
+    return json.loads((FIXTURES / f"search_{subject}_{term}.json").read_text())
 
 
-def load_brooklyn_rows(subject: str) -> list[dict]:
+def load_brooklyn_rows(subject: str, term: str = FALL_2026) -> list[dict]:
     """The same search narrowed to NYU's Brooklyn location filter.
 
     Recorded separately because campus cannot be derived from the course code:
     MATH-UA 140 sections 021 and 022 meet in Brooklyn while its other 30
     sections are at Washington Square.
     """
-    return json.loads((FIXTURES / f"brooklyn_{subject}_{FALL_2026}.json").read_text())
+    return json.loads((FIXTURES / f"brooklyn_{subject}_{term}.json").read_text())
 
 
 @pytest.fixture(autouse=True)
@@ -73,11 +79,13 @@ def provider():
     from campuses import BROOKLYN_CAMP_CODES
 
     p = NYUProvider()
-    for subject in ("MATH-UA", "CSCI-UA", "EG-UY", "CS-UY"):
-        # The cache key includes the location filter, since the same subject
-        # returns different rows filtered and unfiltered.
-        p._cache[(FALL_2026, subject, None)] = load_rows(subject)
-        p._cache[(FALL_2026, subject, BROOKLYN_CAMP_CODES)] = load_brooklyn_rows(subject)
+    for term, subjects in RECORDED.items():
+        for subject in subjects:
+            # The cache key includes the location filter, since the same
+            # subject returns different rows filtered and unfiltered.
+            p._cache[(term, subject, None)] = load_rows(subject, term)
+            p._cache[(term, subject, BROOKLYN_CAMP_CODES)] = \
+                load_brooklyn_rows(subject, term)
 
     def cached_only(term, subject, camp=None):
         key = (term, subject, camp)

@@ -93,6 +93,26 @@ def test_generate_rejects_an_empty_course_list(client):
                                           "courses": []}).status_code == 422
 
 
+def test_a_lectureless_lab_course_generates_schedules(client):
+    """CM-UY 1001 is lab + recitation blocks with no lecture. It used to bundle
+    to nothing, which zeroed every course list containing it."""
+    response = client.post("/generate", json={"term": "spring2027",
+                                              "courses": ["CM-UY 1001",
+                                                          "CM-UY 1003"]})
+    assert response.status_code == 200, response.text
+    assert response.json()["total_schedules"] > 0
+
+
+def test_an_unbundleable_course_is_named_not_reported_as_zero(client, monkeypatch):
+    """A course with no registrable bundle empties the cartesian product. The
+    student needs to know which course did it, not just that nothing fit."""
+    monkeypatch.setattr(api, "unbundleable", lambda courses: ["MATH-UA 121"])
+    response = client.post("/generate", json={"term": "fall2026",
+                                              "courses": ["MATH-UA 121"]})
+    assert response.status_code == 422
+    assert "MATH-UA 121" in response.json()["detail"]
+
+
 def test_generate_rejects_an_unknown_term(client):
     assert client.post("/generate", json={"term": "winter2026",
                                           "courses": ["MATH-UA 121"]}).status_code == 422

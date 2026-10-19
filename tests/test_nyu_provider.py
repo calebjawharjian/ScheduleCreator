@@ -7,7 +7,7 @@ import pytest
 
 from models import Day, SectionKind
 from nyu_provider import _block_stem, _to_minutes, _parse_meetings, KIND_MAP
-from conftest import FALL_2026
+from conftest import FALL_2026, SPRING_2027
 
 
 # --- pure helpers ------------------------------------------------------------
@@ -194,3 +194,24 @@ def test_a_lone_lecture_still_bundles_with_each_lab(provider):
     bundles = valid_bundles(course)
     assert len(bundles) == 4, "one bundle per lab"
     assert all(any(s.kind == SectionKind.LAB for s in b) for b in bundles)
+
+
+def test_a_lectureless_course_bundles_by_block(provider, capsys):
+    """Regression, found in the wild on CM-UY 1001 (Spring 2027). The chem lab
+    course has no lecture -- that is CM-UY 1003 -- only blocks of lab 'A1LB' +
+    recitation 'A1RC'. Every section was dropped as an orphan, the course had
+    no bundles, and any course list containing it produced 0 schedules with no
+    reason given. The block is named in the section number, so each block is
+    one bundle: its lab and its recitation."""
+    from scheduler import valid_bundles
+
+    course = provider.get_courses(SPRING_2027, ["CM-UY 1001"])[0]
+    assert not course.lectures(), "fixture should have no lecture"
+    assert "no lecture to link to" not in capsys.readouterr().out
+
+    bundles = valid_bundles(course)
+    assert len(bundles) == 7, "one bundle per block, A1 through D1"
+    for bundle in bundles:
+        assert sorted(s.kind for s in bundle) == [SectionKind.RECITATION,
+                                                 SectionKind.LAB]
+        assert {s.section_no[:2] for s in bundle} == {bundle[0].block_id}
