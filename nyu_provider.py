@@ -1,6 +1,11 @@
 from __future__ import annotations
+import functools
 import json
 import re
+import tempfile
+from pathlib import Path
+
+import certifi
 import requests
 
 from models import Course, Section, SectionKind, Meeting, Day
@@ -9,6 +14,24 @@ from campuses import BROOKLYN_CAMP_CODES, BROOKLYN, WASHINGTON_SQUARE
 
 URL = "https://bulletins.nyu.edu/class-search/api/"
 HEADERS = {"User-Agent": "ScheduleCreator/0.1 (personal project)"}
+
+EMSIGN_ROOT = Path(__file__).parent / "certs" / "emsign_root_ca_g1.pem"
+
+
+@functools.cache
+def _nyu_ca_bundle() -> str:
+    """certifi's current roots plus emSign Root CA - G1, for NYU's requests only.
+
+    NYU's class search chains to emSign, which certifi 2026.10.18 dropped. It
+    worked on any machine with an older certifi and failed on every fresh
+    install -- which is to say, only once deployed. Appending to certifi's
+    bundle rather than replacing it keeps working if NYU moves to another CA,
+    and scoping it here means no other host trusts emSign.
+    """
+    bundle = Path(tempfile.gettempdir()) / "schedulecreator_nyu_ca.pem"
+    bundle.write_text(Path(certifi.where()).read_text() + "\n"
+                      + EMSIGN_ROOT.read_text())
+    return str(bundle)
 
 # NYU's component codes mapped onto our own enum.
 KIND_MAP = {
@@ -77,7 +100,8 @@ class NYUProvider(CourseProvider):
             criteria.append({"field": "camp", "value": camp})
         payload = {"other": {"srcdb": term}, "criteria": criteria}
         response = requests.post(URL, params=params, data=json.dumps(payload),
-                                 headers=HEADERS, timeout=30)
+                                 headers=HEADERS, timeout=30,
+                                 verify=_nyu_ca_bundle())
         response.raise_for_status()
         results = response.json().get("results", [])
 

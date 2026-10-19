@@ -196,6 +196,21 @@ def test_a_lone_lecture_still_bundles_with_each_lab(provider):
     assert all(any(s.kind == SectionKind.LAB for s in b) for b in bundles)
 
 
+def test_nyu_ca_bundle_adds_emsign_without_dropping_certifi_roots():
+    """Regression from the deployed API. NYU's class search chains to emSign
+    Root CA - G1, which certifi 2026.10.18 removed, so every request failed with
+    CERTIFICATE_VERIFY_FAILED -- but only on fresh installs, never locally.
+    The bundle must carry emSign *and* certifi's roots, so NYU moving to a
+    mainstream CA does not break it again."""
+    from pathlib import Path
+    import certifi
+    from nyu_provider import _nyu_ca_bundle
+
+    bundle = Path(_nyu_ca_bundle()).read_text()
+    assert 'Label: "emSign Root CA - G1"' in bundle
+    assert Path(certifi.where()).read_text() in bundle
+
+
 def test_a_lectureless_course_bundles_by_block(provider, capsys):
     """Regression, found in the wild on CM-UY 1001 (Spring 2027). The chem lab
     course has no lecture -- that is CM-UY 1003 -- only blocks of lab 'A1LB' +
