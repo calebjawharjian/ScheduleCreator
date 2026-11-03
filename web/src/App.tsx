@@ -22,7 +22,8 @@ export default function App() {
   const [meta, setMeta] = useState<Metadata | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
 
-  const [term, setTerm] = useState("fall2026");
+  // Empty until /factors names the default, so the term list lives only in the API.
+  const [term, setTerm] = useState("");
   const [courseText, setCourseText] = useState("");
   const [generation, setGeneration] = useState<GenerateResponse | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -43,6 +44,7 @@ export default function App() {
     fetchMetadata()
       .then((m) => {
         setMeta(m);
+        setTerm(m.default_term);
         setTiers(defaultTiers(m.factors.map((f) => f.name)));
       })
       .catch((error: Error) => setApiError(error.message));
@@ -50,7 +52,7 @@ export default function App() {
 
   const onGenerate = async () => {
     const courses = courseText.split(",").map((c) => c.trim()).filter(Boolean);
-    if (courses.length === 0) return;
+    if (courses.length === 0 || !term) return;
     setGenerating(true);
     setApiError(null);
     setResults(null);
@@ -137,7 +139,7 @@ export default function App() {
         <label>
           <span>Term</span>
           <select value={term} onChange={(e) => setTerm(e.target.value)}>
-            {(meta?.terms ?? ["fall2026"]).map((t) => (
+            {(meta?.terms ?? []).map((t) => (
               <option key={t} value={t}>{formatTerm(t)}</option>
             ))}
           </select>

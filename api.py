@@ -22,12 +22,11 @@ across workers -- see `_Store`.
 from __future__ import annotations
 from dataclasses import dataclass
 import os
-from typing import Literal
 
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from campuses import campuses_in
 from constraints import CommuteBuffer, RequiredInstructor, best_effort
@@ -41,7 +40,10 @@ from scoring import (
 
 load_env()
 
-TERM_CODES = {"fall2026": "1268", "spring2026": "1264", "spring2027": "1274"}
+# The one list of offered terms: request validation and /factors both read it.
+# Fall 2026 (1268) was dropped once NYU stopped serving it.
+TERM_CODES = {"spring2026": "1264", "spring2027": "1274"}
+DEFAULT_TERM = "spring2027"
 DEFAULT_WEIGHTS = {PROFESSOR: 3, TIME: 2, DAYS: 1,
                    DAYS_ON_CAMPUS: 1, IDLE_TIME: 1, LATE_START: 1}
 
@@ -111,8 +113,17 @@ class AlternativeOut(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    term: Literal["fall2026", "spring2026", "spring2027"] = "fall2026"
+    term: str = DEFAULT_TERM
     courses: list[str] = Field(min_length=1)
+
+    @field_validator("term")
+    @classmethod
+    def _known_term(cls, term: str) -> str:
+        # Checked against TERM_CODES rather than a Literal, so adding a term is
+        # one edit instead of two lists that must be kept in agreement.
+        if term not in TERM_CODES:
+            raise ValueError(f"unknown term {term!r}; choose from {sorted(TERM_CODES)}")
+        return term
 
 
 class CourseOut(BaseModel):
@@ -381,4 +392,5 @@ def factors() -> dict:
     return {"factors": [{"name": n, "label": l, "default": DEFAULT_WEIGHTS.get(n, 1)}
                         for n, l in FACTOR_LABELS.items()],
             "terms": sorted(TERM_CODES),
+            "default_term": DEFAULT_TERM,
             "days": [d.name for d in Day]}

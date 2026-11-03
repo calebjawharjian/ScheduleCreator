@@ -75,6 +75,7 @@ export interface FactorMeta {
 export interface Metadata {
   factors: FactorMeta[];
   terms: string[];
+  default_term: string;
   days: string[];
 }
 

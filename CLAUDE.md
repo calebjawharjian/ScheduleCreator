@@ -205,7 +205,11 @@ body: {"other": {"srcdb": "1268"}, "criteria": [{"field": "subject", "value": "C
   Spring 2027 (`12YS`: year, then season digit 2 Jan / 4 Spring / 6 Summer /
   8 Fall). A term can be queryable before it appears in the search page's
   dropdown — `1274` served data while the dropdown still stopped at January
-  2027 — so probe the API rather than trusting the form. The value
+  2027 — so probe the API rather than trusting the form. Terms also *vanish*:
+  by October 2026 `1268` returned 0 rows mid-semester, so Fall 2026 was
+  removed from `api.TERM_CODES` (the one offered-term list; `/factors` sends
+  it and the default to the UI). Its recordings stay as offline fixtures, and
+  `test_api` registers the term name itself. The value
   `9999` is a "default/all" sentinel that returns far more rows; always pass an
   explicit term.
 - **Searches by subject, not by course.** Derive subjects from requested course

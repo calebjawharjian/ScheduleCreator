@@ -12,7 +12,7 @@ const SEASON_LABELS: Record<string, string> = {
   fall: "Fall", spring: "Spring", summer: "Summer", winter: "Winter",
 };
 
-/** "fall2026" -> "Fall 2026" */
+/** "spring2027" -> "Spring 2027" */
 export function formatTerm(term: string): string {
   const match = term.match(/^([a-z]+)(\d+)$/i);
   if (!match) return term;

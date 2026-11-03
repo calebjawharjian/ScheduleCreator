@@ -19,7 +19,8 @@ load_env()
 USE_LIVE_DATA = True
 
 # Friendly names on the CLI, translated to NYU's opaque internal srcdb codes.
-TERM_CODES = {"fall2026": "1268", "spring2026": "1264", "spring2027": "1274"}
+TERM_CODES = {"spring2026": "1264", "spring2027": "1274"}
+DEFAULT_TERM = "spring2027"
 
 DEFAULT_COURSE_CODES = ["CSCI-UA 101", "CSCI-UA 102", "MATH-UA 121"]
 
@@ -60,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate and rank NYU schedules.")
     parser.add_argument("--course", dest="course_codes", action="append", default=None,
                          help='repeatable, e.g. --course "CSCI-UA 101"')
-    parser.add_argument("--term", choices=sorted(TERM_CODES), default="fall2026")
+    parser.add_argument("--term", choices=sorted(TERM_CODES), default=DEFAULT_TERM)
     parser.add_argument("--days", nargs="+", choices=[d.name for d in Day],
                          default=["MON", "WED"])
     parser.add_argument("--time-start", type=_time, default=hhmm("12:00"))
@@ -163,7 +164,7 @@ def prompt_for_preferences():
     course_codes = _ask("Course codes, comma-separated\n", "e.g. " +
                         ", ".join(DEFAULT_COURSE_CODES),
                         _parse_courses, DEFAULT_COURSE_CODES)
-    term_name = _ask("Term", "e.g. fall2026", _parse_term, "fall2026")
+    term_name = _ask("Term", f"e.g. {DEFAULT_TERM}", _parse_term, DEFAULT_TERM)
     days = _ask("Preferred days", "e.g. MON WED", _parse_days, ["MON", "WED"])
     time_start = _ask("Earliest acceptable start time (HH:MM)", "e.g. 12:00",
                       _time, hhmm("12:00"))

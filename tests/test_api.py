@@ -31,6 +31,9 @@ def client(monkeypatch, provider, offline_pages):
 
     provider._instructors = CombinedInstructors(MAInstructors(), CSInstructors())
     monkeypatch.setattr(api, "store", api._Store())
+    # Most fixtures are recorded Fall 2026 responses. The app no longer offers
+    # that term, so the test registers it; spring2027 is real and offered.
+    monkeypatch.setitem(api.TERM_CODES, "fall2026", FALL_2026)
 
     class StubProvider:
         def __init__(self, *args, **kwargs):
@@ -245,7 +248,8 @@ def test_factors_endpoint_describes_the_sliders(client):
     body = client.get("/factors").json()
     names = {f["name"] for f in body["factors"]}
     assert "professor" in names and "days_on_campus" in names
-    assert "fall2026" in body["terms"]
+    assert body["default_term"] == "spring2027"
+    assert body["default_term"] in body["terms"]
     assert "MON" in body["days"]
 
 
