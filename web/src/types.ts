@@ -46,6 +46,8 @@ export interface Alternative {
 export interface Course {
   code: string;
   title: string;
+  topic: string | null;      // set when one code is several courses (CSCI-UA 480)
+  credits: number | null;    // null = unknown, never "zero credits"
   sections: number;
   instructors: string[];
 }

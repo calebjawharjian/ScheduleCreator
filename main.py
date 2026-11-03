@@ -4,6 +4,7 @@ import textwrap
 from models import Day, clock, hhmm
 from narrator import (build_findings, load_env, narrator_from_env,
                       FallbackNarrator, TemplateNarrator)
+from patterns import matches_by_pattern
 from scheduler import generate_schedules, unbundleable
 from scoring import (
     Preferences, rank_schedules, compare_to_ideal, distinct_schedules,
@@ -253,14 +254,20 @@ if stuck:
     raise SystemExit(f"Can't build a registrable set of sections for "
                      f"{', '.join(stuck)}, so no schedule can include it.")
 
-found = {c.code for c in courses}
-for code in course_codes:
-    if code not in found:
+for code, found in matches_by_pattern(course_codes, courses).items():
+    if not found:
         print(f"warning: no sections found for {code}")
+    elif len(found) > 1:
+        # Every course here is treated as required, so a wildcard or a
+        # multi-topic code would demand all of its matches at once.
+        raise SystemExit(f"{code} matches {len(found)} courses; choosing among "
+                         f"them needs optional course selection (not yet built).")
 
 print("Loaded:")
 for course in courses:
-    print(f"  {course.code}  {course.title}  ({len(course.sections)} sections)")
+    credits = f"{course.credits:g} cr" if course.credits is not None else "? cr"
+    print(f"  {course.label}  {course.title}  ({credits}, "
+          f"{len(course.sections)} sections)")
 
 # Travel time only matters, and is only asked about, when the courses actually
 # span campuses. Detected here because this is the first point the real course

@@ -26,7 +26,15 @@ SPRING_2027 = "1274"
 # Recorded subjects per term. CM-UY is Spring 2027 because that is where its
 # lectureless lab course (CM-UY 1001) was found.
 RECORDED = {FALL_2026: ("MATH-UA", "CSCI-UA", "EG-UY", "CS-UY"),
-            SPRING_2027: ("CM-UY",)}
+            SPRING_2027: ("CM-UY", "CSCI-UA")}
+
+
+def load_details(term: str) -> dict[str, dict]:
+    """Recorded details records (credits, topic), keyed by CRN. Only Spring
+    2027 has any: Fall 2026 was recorded before credits were read, and NYU no
+    longer serves it, so its courses honestly come back with unknown credits."""
+    path = FIXTURES / f"details_{term}.json"
+    return json.loads(path.read_text()) if path.exists() else {}
 
 
 def load_rows(subject: str, term: str = FALL_2026) -> list[dict]:
@@ -94,6 +102,15 @@ def provider():
         return p._cache[key]
 
     p._search_subject = cached_only
+
+    details = {term: load_details(term) for term in RECORDED}
+
+    def recorded_details(term, code, crn):
+        # An unrecorded CRN reads as "no hours given" -> credits None, the same
+        # thing the provider reports when NYU's record lacks them.
+        return details[term].get(crn, {})
+
+    p._details = recorded_details
     return p
 
 

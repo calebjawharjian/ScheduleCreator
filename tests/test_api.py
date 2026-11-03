@@ -137,6 +137,36 @@ def test_an_upstream_failure_is_a_readable_502_the_browser_can_see(
     assert response.headers["access-control-allow-origin"] == origin
 
 
+def test_a_malformed_course_is_a_422_not_a_crash(client):
+    response = client.post("/generate", json={"term": "spring2027",
+                                              "courses": ["CSCI 101"]})
+    assert response.status_code == 422
+    assert "CSCI 101" in response.json()["detail"]
+
+
+def test_wildcards_are_refused_until_optional_selection_exists(client):
+    """Every returned course is required today, so a wildcard would demand all
+    of its matches at once. Refusing is the honest interim answer."""
+    response = client.post("/generate", json={"term": "spring2027",
+                                              "courses": ["CSCI-UA 4xx"]})
+    assert response.status_code == 422
+    assert "CSCI-UA 4xx" in response.json()["detail"]
+
+
+def test_a_multi_topic_code_names_its_topics_instead_of_requiring_all(client):
+    response = client.post("/generate", json={"term": "spring2027",
+                                              "courses": ["CSCI-UA 480"]})
+    assert response.status_code == 422
+    assert "Quantum Computing" in response.json()["detail"]
+
+
+def test_generate_reports_topic_and_credits(client):
+    response = client.post("/generate", json={"term": "spring2027",
+                                              "courses": ["CM-UY 1001", "CM-UY 1003"]})
+    credits = {c["code"]: c["credits"] for c in response.json()["courses"]}
+    assert credits == {"CM-UY 1001": 1.0, "CM-UY 1003": 3.0}
+
+
 def test_generate_rejects_an_unknown_term(client):
     assert client.post("/generate", json={"term": "winter2026",
                                           "courses": ["MATH-UA 121"]}).status_code == 422

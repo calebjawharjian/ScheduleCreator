@@ -192,10 +192,11 @@ def schedule_shape(schedule: list[Section]) -> tuple:
     Campus and non-lecture instructors are included too: scoring ignores them,
     but a Brooklyn lab is not interchangeable with a Manhattan one at the same
     hour, and including a field can only split groups, never wrongly merge.
+    Topic likewise: two CSCI-UA 480 topics at one hour are different courses.
     """
     return tuple(sorted(
-        (section.course_code, section.kind, section.instructor or "",
-         section.campus or "",
+        (section.course_code, section.topic or "", section.kind,
+         section.instructor or "", section.campus or "",
          tuple(sorted((m.day, m.start, m.end) for m in section.meetings)))
         for section in schedule
     ))

@@ -73,6 +73,7 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `models.py` | Core dataclasses: `Day`, `SectionKind`, `Meeting`, `Section`, `Course` |
 | `providers.py` | Abstract `CourseProvider` interface + `FixtureProvider` |
 | `fixtures.py` | Hand-built offline course data for development and testing |
+| `patterns.py` | `CoursePattern`: an exact code (`CSCI-UA 102`) or a level wildcard (`CSCI-UA 4xx`) |
 | `nyu_provider.py` | Live NYU class-search provider, plus instructor enrichment |
 | `ma_instructors.py` | Math dept (Courant) instructor-name source |
 | `cs_instructors.py` | CS dept instructor-name source |
@@ -228,6 +229,48 @@ body: {"other": {"srcdb": "1268"}, "criteria": [{"field": "subject", "value": "C
   PSYCH-UA, HIST-UA, CHEM-UA for Fall 2026, and 0 of 274 for the already-completed
   Spring 2026 term. NYU's public search does not publish instructors. Do not build
   anything that expects this field to populate.
+
+### Credits: the details endpoint's `hours_html`
+
+The search rows carry no credits; the details endpoint (below) does, as
+`hours_html` (`"4 Hour Lecture"`). One request per course, cached by CRN.
+
+- **It is the course's credits, repeated on every section** — MATH-UA 121's
+  *recitation* reads `"4 Hour Recitation"`, EG-UY 1004's lab `"4 Hour
+  Laboratory"`. Read once per course (from its first section in numeric
+  order, so the request is deterministic and recordable), **never summed over
+  a bundle**, which would make EG-UY 1004 twelve credits.
+- CM-UY 1001 (lab + recitation) is 1 credit; CM-UY 1003 is 3.
+- Unparseable or unreachable → `Course.credits = None` with a warning.
+  **Unknown is not zero**: a credit range must refuse it, not count it free.
+- Recorded Fall 2026 fixtures have no details (recorded before credits were
+  read; NYU no longer serves the term), so those courses report `None`.
+
+### Special Topics: one code, several courses
+
+**A catalog code is not a course identity.** CSCI-UA 480 in Spring 2027 is
+seven different courses (Graphics, Networks, Vision, Quantum Computing...)
+told apart *only by title*. Grouped by code they became one course with seven
+interchangeable lectures. Courses are now grouped by `(code, title)`, and a
+code with several titles gets a `Course.topic` / `Section.topic`.
+
+- Checked across 18 subjects: **every** multi-title code was a genuine topics
+  course (PSYCH-UA 300, CORE-UA 400/500/700, HIST-UA, POL-UA, CS-UY 3943,
+  DS-UA 301...). No ordinary course was split.
+- **Departments spell the heading differently**: `"Special Topics in Computer
+  Science: Computer Graphics"`, `"Spec Topics Psych:: Computational..."`
+  (double colon), `"Texts & Ideas: Topics: A Genealogy of Morality"` (two
+  levels). Splitting on the first colon fit only the first. `_topics` strips
+  the prefix all siblings share, cut back to its last colon — without the
+  cut-back, Graphics/Networks/Vision (all starting `"Computer "`) lose a word.
+- `topic` is in `schedule_shape`: two topics at one hour are different courses.
+- Typing a multi-topic code is effectively a wildcard: "one of these topics".
+
+### Section types seen but not handled
+
+- **`SEM` (seminar)** — HIST-UA 550's sections are all `SEM`, so every one is
+  skipped with a warning, the course has no sections, and `unbundleable`
+  reports it. Loud, not silent, but seminar-only courses cannot be scheduled.
 
 ### Details endpoint (checked, not useful for linkage)
 

@@ -196,6 +196,74 @@ def test_a_lone_lecture_still_bundles_with_each_lab(provider):
     assert all(any(s.kind == SectionKind.LAB for s in b) for b in bundles)
 
 
+def test_a_wildcard_returns_every_course_at_that_level(provider):
+    courses = provider.get_courses(SPRING_2027, ["CSCI-UA 4xx"])
+    codes = {c.code for c in courses}
+    assert "CSCI-UA 473" in codes and "CSCI-UA 480" in codes
+    assert all(c.code.startswith("CSCI-UA 4") and len(c.code) == len("CSCI-UA 4xx")
+               for c in courses)
+
+
+def test_one_code_with_several_topics_is_several_courses(provider):
+    """Found on CSCI-UA 480, Spring 2027: one code, seven Special Topics told
+    apart only by title. Grouped by code they became one 'course' with seven
+    interchangeable lectures -- Graphics offered as a substitute for Quantum
+    Computing."""
+    courses = provider.get_courses(SPRING_2027, ["CSCI-UA 480"])
+    topics = {c.topic for c in courses}
+    assert len(courses) == 7
+    assert {"Computer Graphics", "Quantum Computing"} <= topics
+    for course in courses:
+        assert all(s.topic == course.topic for s in course.sections)
+        assert course.label == f"CSCI-UA 480: {course.topic}"
+
+
+@pytest.mark.parametrize("titles, expected", [
+    # Real Spring 2027 titles, one shape per department convention seen.
+    (["Special Topics in Computer Science: Computer Graphics",
+      "Special Topics in Computer Science: Computer Vision"],
+     ["Computer Graphics", "Computer Vision"]),
+    (["Spec Topics Psych:: Computational Cognitive Science",
+      "Spec Topics Psych:: Human Sentence Processing"],
+     ["Computational Cognitive Science", "Human Sentence Processing"]),
+    (["Texts & Ideas: Topics: A Genealogy of Morality",
+      "Texts & Ideas: Topics: Exile and Migration"],
+     ["A Genealogy of Morality", "Exile and Migration"]),
+    (["Topics:", "Topics:: Boccaccio’s Decameron"],
+     ["Topics:", "Boccaccio’s Decameron"]),
+    (["Topics in Middle Eastern History",
+      "Topics in Middle Eastern History: Sufis: Mystics of Islam"],
+     ["Topics in Middle Eastern History", "Sufis: Mystics of Islam"]),
+])
+def test_topics_strip_the_shared_heading_whatever_its_spelling(titles, expected):
+    """Splitting on the first colon fit only CSCI-UA 480. Departments spell
+    the heading differently, and some siblings share words past it ('Computer
+    Graphics' / 'Computer Vision') that must not be eaten."""
+    from nyu_provider import _topics
+    topics = _topics(titles)
+    assert [topics[t] for t in titles] == expected
+
+
+def test_an_ordinary_course_has_no_topic(provider):
+    course = provider.get_courses(SPRING_2027, ["CSCI-UA 101"])[0]
+    assert course.topic is None and course.label == "CSCI-UA 101"
+
+
+def test_credits_are_the_course_value_never_summed_over_sections(provider):
+    """hours_html repeats the course's credits on every section, so CM-UY 1001
+    (lab + recitation) is 1 credit, not 1 per section in the bundle."""
+    lab, lecture = provider.get_courses(SPRING_2027, ["CM-UY 1001", "CM-UY 1003"])
+    assert lab.credits == 1.0
+    assert lecture.credits == 3.0
+
+
+def test_unknown_credits_are_none_not_zero(provider):
+    """Fall 2026 was recorded before credits were read. Unknown must stay
+    distinguishable from zero, or a credit range would count it as free."""
+    course = provider.get_courses(FALL_2026, ["CSCI-UA 101"])[0]
+    assert course.credits is None
+
+
 def test_nyu_ca_bundle_adds_emsign_without_dropping_certifi_roots():
     """Regression from the deployed API. NYU's class search chains to emSign
     Root CA - G1, which certifi 2026.10.18 removed, so every request failed with

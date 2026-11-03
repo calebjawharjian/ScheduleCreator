@@ -32,6 +32,7 @@ from campuses import campuses_in
 from constraints import CommuteBuffer, RequiredInstructor, best_effort
 from models import Day, Section, clock, hhmm
 from narrator import build_findings, load_env, narrator_from_env, TemplateNarrator
+from patterns import CoursePattern, matches_by_pattern
 from scheduler import generate_schedules, unbundleable
 from scoring import (
     DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
@@ -129,6 +130,8 @@ class GenerateRequest(BaseModel):
 class CourseOut(BaseModel):
     code: str
     title: str
+    topic: str | None            # set when one code is several courses (CSCI-UA 480)
+    credits: float | None        # None = unknown, never "zero credits"
     sections: int
     instructors: list[str]
 
@@ -234,6 +237,17 @@ def generate(request: GenerateRequest) -> GenerateResponse:
 
     term = TERM_CODES[request.term]
     key = _generation_key(request.term, request.courses)
+    try:
+        patterns = [CoursePattern.parse(text) for text in request.courses]
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    wildcards = [str(p) for p in patterns if p.is_wildcard]
+    if wildcards:
+        # Until optional course groups exist, every returned course would be
+        # treated as required -- all 18 CSCI-UA 4xx at once. Refuse instead.
+        raise HTTPException(
+            422, f"wildcards ({', '.join(wildcards)}) need optional course "
+                 f"selection, which is not available yet")
 
     if key not in store.generations:
         provider = NYUProvider(
@@ -249,6 +263,19 @@ def generate(request: GenerateRequest) -> GenerateResponse:
                 502, f"NYU's class search request failed: {exc}") from exc
         if not courses:
             raise HTTPException(404, "no sections found for any requested course")
+        multi = {text: found for text, found
+                 in matches_by_pattern(request.courses, courses).items()
+                 if len(found) > 1}
+        if multi:
+            # One code covering several distinct courses (CSCI-UA 480's Special
+            # Topics). Requiring every topic is wrong; picking one is the
+            # optional-group feature, so for now name them and stop.
+            text, found = next(iter(multi.items()))
+            raise HTTPException(
+                422, f"{text} is {len(found)} different courses this term: "
+                     f"{'; '.join(c.topic or c.title for c in found)}. "
+                     f"Choosing among them needs optional course selection, "
+                     f"which is not available yet")
         stuck = unbundleable(courses)
         if stuck:
             raise HTTPException(
@@ -269,15 +296,16 @@ def generate(request: GenerateRequest) -> GenerateResponse:
             schedules=generate_schedules(courses), ratings=ratings)
 
     generation = store.generations[key]
-    found = {c.code for c in generation.courses}
+    matched = matches_by_pattern(request.courses, generation.courses)
 
     return GenerateResponse(
         generation_id=key,
         courses=[CourseOut(
-            code=c.code, title=c.title, sections=len(c.sections),
+            code=c.code, title=c.title, topic=c.topic, credits=c.credits,
+            sections=len(c.sections),
             instructors=sorted({s.instructor for s in c.sections if s.instructor}),
         ) for c in generation.courses],
-        missing=[c for c in request.courses if c not in found],
+        missing=[text for text, found in matched.items() if not found],
         campuses=sorted(campuses_in(generation.courses)),
         total_schedules=len(generation.schedules),
         ratings=generation.ratings,

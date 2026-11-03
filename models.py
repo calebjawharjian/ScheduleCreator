@@ -65,13 +65,26 @@ class Section:
     # anchor them: CM-UY 1001 is lab 'A1LB' + recitation 'A1RC', block 'A1'.
     # Unused when the course has a lecture -- parent_section_id does that job.
     block_id: str | None = None
+    # Set when one catalog code covers several distinct courses: CSCI-UA 480
+    # is seven Special Topics. Copied from the Course so a section can be
+    # displayed and collapsed without a back-reference to its course.
+    topic: str | None = None
 
 
 @dataclass
 class Course:
-    code: str                  # "MATH-UA 121"
+    code: str                  # "MATH-UA 121" -- the catalog code, shared by topics
     title: str                 # "Calculus I"
     sections: list[Section] = field(default_factory=list)
+    topic: str | None = None   # "Computer Graphics"; None for an ordinary course
+    # The course's credits, read once per course. None means unknown, which is
+    # not zero: a credit range must refuse it rather than count it as free.
+    credits: float | None = None
+
+    @property
+    def label(self) -> str:
+        """'CSCI-UA 480: Computer Graphics', or just the code."""
+        return f"{self.code}: {self.topic}" if self.topic else self.code
 
     def lectures(self) -> list[Section]:
         return [s for s in self.sections if s.kind == SectionKind.LECTURE]

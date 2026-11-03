@@ -1,6 +1,7 @@
 from __future__ import annotations
 import functools
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -9,6 +10,7 @@ import certifi
 import requests
 
 from models import Course, Section, SectionKind, Meeting, Day
+from patterns import CoursePattern
 from providers import CourseProvider
 from campuses import BROOKLYN_CAMP_CODES, BROOKLYN, WASHINGTON_SQUARE
 
@@ -16,6 +18,35 @@ URL = "https://bulletins.nyu.edu/class-search/api/"
 HEADERS = {"User-Agent": "ScheduleCreator/0.1 (personal project)"}
 
 EMSIGN_ROOT = Path(__file__).parent / "certs" / "emsign_root_ca_g1.pem"
+
+# '4 Hour Lecture' -> 4. Anchored at the start so a range like '1 - 4 Hour'
+# fails to match and is reported, rather than read as 1.
+CREDITS_RE = re.compile(r"(\d+(?:\.\d+)?) Hours? ")
+
+def _topics(titles: list[str]) -> dict[str, str]:
+    """Each sibling title -> the part that tells it apart.
+
+    Derived from the titles themselves, because departments spell topics
+    every which way (Spring 2027): 'Special Topics in Computer Science:
+    Computer Graphics', 'Spec Topics Psych:: Computational Cognitive Science',
+    'Texts & Ideas: Topics: A Genealogy of Morality'. Splitting on the first
+    colon fit only the first. Instead: strip the prefix every sibling shares,
+    cut back to its last colon -- otherwise Graphics, Networks and Vision,
+    which all begin 'Computer ', would come out as 'Graphics'. A title with
+    nothing left after that ('Topics:', or a bare 'Topics in Middle Eastern
+    History' beside its subtitled siblings) keeps its full title.
+    """
+    shared = os.path.commonprefix(titles)
+    cut = shared.rfind(":") + 1          # 0 when the shared part has no colon
+    if shared in titles:
+        # A bare heading listed beside its subtitled siblings is the heading
+        # in full, colon or not: 'Topics in Middle Eastern History'.
+        cut = max(cut, len(shared))
+    topics = {}
+    for title in titles:
+        rest = title[cut:].lstrip(": ").strip()
+        topics[title] = rest or title
+    return topics
 
 
 @functools.cache
@@ -81,6 +112,7 @@ class NYUProvider(CourseProvider):
 
     def __init__(self, instructors=None):
             self._cache: dict[tuple[str, str], list[dict]] = {}
+            self._details_cache: dict[tuple[str, str], dict] = {}
             self._instructors = instructors
 
     def _search_subject(self, term: str, subject: str,
@@ -214,9 +246,53 @@ class NYUProvider(CourseProvider):
         stems = {row["crn"]: _block_stem(row.get("no")) for row in usable}
         return stems if all(stems.values()) else {}
 
+    def _details(self, term: str, code: str, crn: str) -> dict:
+        """The per-section details record. One request, cached by CRN."""
+        key = (term, crn)
+        if key not in self._details_cache:
+            payload = {"group": f"code:{code}", "key": f"crn:{crn}",
+                       "srcdb": term, "matched": f"crn:{crn}"}
+            response = requests.post(
+                URL, params={"page": "fose", "route": "details"},
+                data=json.dumps(payload), headers=HEADERS, timeout=30,
+                verify=_nyu_ca_bundle())
+            response.raise_for_status()
+            self._details_cache[key] = response.json()
+        return self._details_cache[key]
+
+    def _credits(self, term: str, code: str, crn: str) -> float | None:
+        """A course's credits, from any one of its sections.
+
+        `hours_html` is the *course's* credit count repeated on every section:
+        MATH-UA 121's recitation reads '4 Hour Recitation' and EG-UY 1004's lab
+        '4 Hour Laboratory', for 4-credit courses. So it is read once per course
+        and never summed across a bundle, which would triple-count EG-UY 1004.
+
+        None, with a warning, when it cannot be read. Credits only matter once
+        a credit range is set, and that path refuses unknown credits loudly
+        instead of treating them as zero.
+        """
+        try:
+            text = self._details(term, code, crn).get("hours_html") or ""
+        except requests.RequestException as exc:
+            print(f"warning: could not read credits for {code}: {exc}")
+            return None
+        match = CREDITS_RE.match(text)
+        if not match:
+            print(f"warning: unrecognized credits {text!r} for {code}")
+            return None
+        return float(match.group(1))
+
     def get_courses(self, term: str, course_codes: list[str]) -> list[Course]:
-        wanted = set(course_codes)
-        subjects = {_subject_of(code) for code in wanted}
+        """Courses matching each code or wildcard, in request order.
+
+        A wildcard ('CSCI-UA 4xx') returns every match. A code that NYU uses
+        for several distinct courses -- CSCI-UA 480 is seven Special Topics in
+        Spring 2027 -- returns one Course per topic, so Graphics and Quantum
+        Computing are never offered as interchangeable sections of one class.
+        """
+        patterns = [CoursePattern.parse(code) for code in course_codes]
+        subjects = {p.subject for p in patterns}
 
         rows: list[dict] = []
         brooklyn_crns: set[str] = set()
@@ -224,15 +300,29 @@ class NYUProvider(CourseProvider):
             rows.extend(self._search_subject(term, subject))
             brooklyn_crns |= self._brooklyn_crns(term, subject)
 
-        by_code: dict[str, list[dict]] = {}
+        # Grouped by (code, title), not code: the title is what tells Special
+        # Topics apart. An ordinary course has one title across its sections.
+        by_course: dict[tuple[str, str], list[dict]] = {}
         for row in rows:
-            if row["code"] in wanted and not row.get("isCancelled"):
-                by_code.setdefault(row["code"], []).append(row)
+            if (any(p.matches(row["code"]) for p in patterns)
+                    and not row.get("isCancelled")):
+                key = (row["code"], row.get("title", ""))
+                by_course.setdefault(key, []).append(row)
+        titles_by_code: dict[str, list[str]] = {}
+        for code, title in by_course:
+            titles_by_code.setdefault(code, []).append(title)
+        topic_of = {(code, title): topic
+                    for code, titles in titles_by_code.items() if len(titles) > 1
+                    for title, topic in _topics(sorted(titles)).items()}
 
-        courses: dict[str, Course] = {}
-        for code, course_rows in by_code.items():
-            course = Course(code=code, title=course_rows[0].get("title", ""))
+        courses: dict[tuple[str, str], Course] = {}
+        for (code, title), course_rows in by_course.items():
+            topic = topic_of.get((code, title))
+            # Sorted first so credits always come from the same section,
+            # whatever order the API returned rows in.
             course_rows.sort(key=self._section_order)
+            course = Course(code=code, title=title, topic=topic,
+                            credits=self._credits(term, code, course_rows[0]["crn"]))
 
             usable: list[dict] = []
             for row in course_rows:
@@ -259,9 +349,10 @@ class NYUProvider(CourseProvider):
                     campus=(BROOKLYN if row["crn"] in brooklyn_crns
                             else WASHINGTON_SQUARE),
                     block_id=blocks.get(row["crn"]),
+                    topic=topic,
                 ))
 
-            courses[code] = course
+            courses[(code, title)] = course
 
         # Enrichment pass: overlay department-published instructor names.  <-- added block
         if self._instructors is not None:
@@ -272,4 +363,13 @@ class NYUProvider(CourseProvider):
                     if name:
                         s.instructor = name
 
-        return [courses[c] for c in course_codes if c in courses]
+        # Request order, then catalog order within a wildcard. A course matched
+        # by two patterns ('CSCI-UA 4xx' and 'CSCI-UA 472') is returned once.
+        ordered: list[Course] = []
+        seen: set[tuple[str, str]] = set()
+        for pattern in patterns:
+            for key in sorted(courses):
+                if pattern.matches(key[0]) and key not in seen:
+                    seen.add(key)
+                    ordered.append(courses[key])
+        return ordered
