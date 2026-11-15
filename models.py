@@ -55,6 +55,10 @@ class Section:
     instructor: str | None
     meetings: list[Meeting] = field(default_factory=list)
     parent_section_id: str | None = None   # set on a recitation/lab tied to a lecture
+    # A lab/recitation that pairs with *any* of its course's lectures: CS-UY
+    # 2124's 'LAB1'-'LAB6' name no lecture. Explicit, because a missing parent
+    # alone means "orphan", and orphans silently produced lecture-only bundles.
+    any_lecture: bool = False
     is_open: bool = True
     section_no: str | None = None   # '001', for joining to department listings
     # Where this section physically meets. Per-section, not per-course: some
@@ -90,7 +94,10 @@ class Course:
         return [s for s in self.sections if s.kind == SectionKind.LECTURE]
 
     def recitations_for(self, lecture_id: str) -> list[Section]:
+        """Non-lecture sections that can be taken with this lecture: those
+        linked to it, plus any course-wide ones."""
         return [
             s for s in self.sections
-            if s.kind != SectionKind.LECTURE and s.parent_section_id == lecture_id
+            if s.kind != SectionKind.LECTURE
+            and (s.parent_section_id == lecture_id or s.any_lecture)
         ]

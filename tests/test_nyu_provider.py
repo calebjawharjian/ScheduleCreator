@@ -196,6 +196,83 @@ def test_a_lone_lecture_still_bundles_with_each_lab(provider):
     assert all(any(s.kind == SectionKind.LAB for s in b) for b in bundles)
 
 
+@pytest.mark.parametrize("no, letter", [
+    ("ALEC", "A"), ("A", "A"), ("ARC1", "A"), ("AREC", "A"), ("ALAB", "A"),
+    ("A1LB", "A"), ("GRC4", "G"), ("LAB1", ""), ("LEC", ""), ("001", ""),
+])
+def test_block_letter_reads_tandon_lettered_numbering(no, letter):
+    """A component code's own letters ('LAB', 'LEC') are never the block."""
+    from nyu_provider import _block_letter
+    assert _block_letter(no) == letter
+
+
+def _bundle_kinds(course):
+    from scheduler import valid_bundles
+    return [sorted(s.kind for s in b) for b in valid_bundles(course)]
+
+
+def test_numbered_labs_pair_with_every_lettered_lecture(provider):
+    """Regression, found by the user on CS-UY 2124 (Spring 2027): lectures
+    ALEC/BLEC/CLEC, labs LAB1-LAB6. The CAS 'belongs to the previous lecture'
+    scan ran on it; lettered lectures have no digits and sort first, so all
+    six labs landed on CLEC and ALEC/BLEC became lecture-only bundles --
+    unregistrable, and ranked *well* for having fewer classes."""
+    course = provider.get_courses(SPRING_2027, ["CS-UY 2124"])[0]
+    labs = [s for s in course.sections if s.kind == SectionKind.LAB]
+    assert len(course.lectures()) == 3 and len(labs) == 6
+    assert all(s.any_lecture for s in labs)
+    kinds = _bundle_kinds(course)
+    assert len(kinds) == 3 * 6
+    assert all(k == [SectionKind.LECTURE, SectionKind.LAB] for k in kinds)
+
+
+def test_lab_letters_beyond_the_lectures_mean_course_wide(provider):
+    """ECE-UY 3114: lectures A-B, labs A1-E2. Lab groups C, D and E name no
+    lecture, so the letters are lab slots and every lab pairs with both."""
+    course = provider.get_courses(SPRING_2027, ["ECE-UY 3114"])[0]
+    assert all(s.any_lecture for s in course.sections
+               if s.kind != SectionKind.LECTURE)
+    kinds = _bundle_kinds(course)
+    assert len(kinds) == 2 * 10
+    assert all(SectionKind.LAB in k for k in kinds), "no lecture-only bundle"
+
+
+def test_letters_that_name_lectures_link_by_letter(provider):
+    """MA-UY 1044: lectures A-G, recitations ARC1-GRC4. The letter is the
+    link -- corroborated by NYU noting that both A and ARC1 meet at
+    Washington Square."""
+    course = provider.get_courses(SPRING_2027, ["MA-UY 1044"])[0]
+    by_id = {s.section_id: s for s in course.sections}
+    for s in course.sections:
+        if s.kind == SectionKind.LECTURE:
+            continue
+        assert not s.any_lecture
+        assert by_id[s.parent_section_id].section_no == s.section_no[0], s.section_no
+
+
+def test_numeric_cas_numbering_still_links_sequentially(provider):
+    """The sequential scan is now numeric-only; CAS courses must not change."""
+    course = provider.get_courses(SPRING_2027, ["MATH-UA 262"])[0]
+    by_id = {s.section_id: s for s in course.sections}
+    links = {s.section_no: by_id[s.parent_section_id].section_no
+             for s in course.sections if s.parent_section_id}
+    assert links == {"002": "001", "004": "003", "008": "007"}
+
+
+def test_the_reported_course_list_never_offers_a_lab_course_without_its_lab(provider):
+    """The user's own list, end to end: every schedule includes a lab for
+    each course that has labs."""
+    from scheduler import generate_schedules
+    codes = ["CS-UY 2124", "ECE-UY 4144", "ECE-UY 3114", "MATH-UA 262"]
+    courses = provider.get_courses(SPRING_2027, codes)
+    schedules = generate_schedules(courses)
+    assert schedules
+    for schedule in schedules:
+        for code in ("CS-UY 2124", "ECE-UY 4144", "ECE-UY 3114"):
+            assert any(s.course_code == code and s.kind == SectionKind.LAB
+                       for s in schedule), f"{code} scheduled without a lab"
+
+
 def test_a_wildcard_returns_every_course_at_that_level(provider):
     courses = provider.get_courses(SPRING_2027, ["CSCI-UA 4xx"])
     codes = {c.code for c in courses}

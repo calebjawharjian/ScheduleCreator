@@ -26,7 +26,8 @@ SPRING_2027 = "1274"
 # Recorded subjects per term. CM-UY is Spring 2027 because that is where its
 # lectureless lab course (CM-UY 1001) was found.
 RECORDED = {FALL_2026: ("MATH-UA", "CSCI-UA", "EG-UY", "CS-UY"),
-            SPRING_2027: ("CM-UY", "CSCI-UA")}
+            SPRING_2027: ("CM-UY", "CSCI-UA", "CS-UY", "ECE-UY", "MA-UY",
+                          "CE-UY", "MATH-UA")}
 
 
 def load_details(term: str) -> dict[str, dict]:

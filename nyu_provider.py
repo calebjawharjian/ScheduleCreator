@@ -83,6 +83,23 @@ def _block_stem(section_no: str | None) -> str | None:
     return match.group(1) if match else None
 
 
+# Tandon's lettered numbering: an optional block letter, then optional digits
+# and a component code. 'ALEC' -> 'A', 'A' -> 'A', 'ARC1' -> 'A', 'A1LB' ->
+# 'A'; 'LAB1' and 'LEC' -> '' (the regex backtracks off 'L' when what follows
+# is not a component code, so a component's own letters are never the block).
+BLOCK_LETTER_RE = re.compile(r"([A-Z]?)\d*(?:LEC|LC|LAB|LB|REC|RC)?\d*")
+
+# Parent marker for a component that pairs with any of its course's lectures.
+ANY_LECTURE = "*"
+
+
+def _block_letter(section_no: str | None) -> str | None:
+    """The block letter of a lettered section number: '' when it names none,
+    None when the number is not in this shape at all."""
+    match = BLOCK_LETTER_RE.fullmatch(section_no or "")
+    return match.group(1) if match else None
+
+
 def _subject_of(course_code: str) -> str:
     """'CSCI-UA 102' -> 'CSCI-UA'. The API searches by subject, not by course."""
     return course_code.split()[0]
@@ -181,12 +198,20 @@ class NYUProvider(CourseProvider):
           irrelevant. Required here: the component suffixes sort 'A1LB' before
           'A1LC', so a sequential scan attaches every lab to the *previous*
           block's lecture, silently and undetectably.
+        * **Lettered** (Tandon: lecture 'A' or 'ALEC', components 'ARC1',
+          'AREC', 'ALAB' -- or 'LAB1' naming no lecture). See `_link_by_letter`.
         * **Sequential** (CAS: '001' lecture, '002'-'005' recitations). No block
           is named, so a lecture starts a block and the following non-lectures
           belong to it. Still an inference; see tests/test_live_data.py.
+          **Numeric numbering only.** It once ran on everything else too, and
+          on lettered lectures it is silently wrong: 'ALEC' has no digits, so
+          it sorts before 'LAB1', and every lab of CS-UY 2124 landed on the
+          *last* lecture -- leaving ALEC and BLEC as lecture-only bundles that
+          cannot be registered, which then ranked well for having fewer classes.
 
         Stems are used only when *every* section has one, so a course with mixed
         or unrecognized numbering falls back rather than half-applying a scheme.
+        A course-wide component maps to ANY_LECTURE rather than a CRN.
         """
         stems = {row["crn"]: _block_stem(row.get("no")) for row in usable}
         parents: dict[str, str | None] = {}
@@ -210,6 +235,8 @@ class NYUProvider(CourseProvider):
             for row in usable:
                 if KIND_MAP[row["schd"]] != SectionKind.LECTURE:
                     parents[row["crn"]] = lecture_by_stem.get(stems[row["crn"]])
+        elif not all(row.get("no", "")[:1].isdigit() for row in usable):
+            parents = self._link_by_letter(code, usable)
         else:
             current_lecture_id: str | None = None
             for row in usable:
@@ -226,6 +253,48 @@ class NYUProvider(CourseProvider):
                       f"({row['schd']}) has no lecture to link to; unlinked")
 
         return parents
+
+    def _link_by_letter(self, code: str, usable: list[dict]) -> dict[str, str]:
+        """Tandon's lettered numbering: link by letter where the letters name
+        lectures, otherwise every component is course-wide.
+
+        Two shapes, 16 multi-lecture courses in Spring 2027:
+
+        * **Letters name lectures.** MA-UY 1044 lectures 'A'-'G', recitations
+          'ARC1'-'GRC4'; PH-UY 1223 'ALEC' with 'AREC'; CE-UY 1002 'ALEC' with
+          'ALAB'. Corroborated where NYU says anything at all: MA-UY 1044's
+          lecture A and recitation ARC1 both carry the note that they meet at
+          Washington Square.
+        * **Components name no lecture.** CS-UY 1113/1114/1134/2124 have
+          'LAB1'-'LAB8' beside lettered lectures; ECE-UY 3114 has labs A-E
+          against lectures A-B only, so its letters are lab slots, not lecture
+          names. Any lecture pairs with any lab.
+
+        The rule: letters link only if every lecture has its own letter and
+        every component's letter is one of them. A component with no letter, or
+        a letter no lecture has, shows the letters are not lecture names, and
+        then the whole course is course-wide -- one reading per course, never a
+        mix. NYU publishes nothing else to decide by (clssnotes are silent).
+        """
+        lectures = [r for r in usable if KIND_MAP[r["schd"]] == SectionKind.LECTURE]
+        others = [r for r in usable if KIND_MAP[r["schd"]] != SectionKind.LECTURE]
+        letters = {r["crn"]: _block_letter(r.get("no")) for r in usable}
+        lecture_by_letter = {letters[r["crn"]]: r["crn"] for r in lectures}
+        letters_name_lectures = (
+            len(lecture_by_letter) == len(lectures)
+            and not {"", None} & lecture_by_letter.keys()
+            and all(letters[r["crn"]] in lecture_by_letter for r in others))
+
+        if letters_name_lectures:
+            return {r["crn"]: lecture_by_letter[letters[r["crn"]]] for r in others}
+        if None in letters.values():
+            # Neither lettered nor numeric nor stemmed: a shape not seen yet.
+            # Still course-wide (dropping the components would bundle
+            # unregistrable lecture-only schedules), but said out loud.
+            print(f"warning: {code} has unrecognized section numbering "
+                  f"{sorted(r.get('no') for r in usable)}; assuming any lecture "
+                  f"pairs with any lab/recitation")
+        return {r["crn"]: ANY_LECTURE for r in others}
 
     def _blocks(self, usable: list[dict]) -> dict[str, str]:
         """CRN -> block stem, for a course with no lecture at all.
@@ -344,7 +413,9 @@ class NYUProvider(CourseProvider):
                     kind=kind,
                     instructor=row.get("instr") or None,
                     meetings=_parse_meetings(row.get("meetingTimes", "")),
-                    parent_section_id=parents.get(row["crn"]),
+                    parent_section_id=(None if parents.get(row["crn"]) == ANY_LECTURE
+                                       else parents.get(row["crn"])),
+                    any_lecture=parents.get(row["crn"]) == ANY_LECTURE,
                     section_no=row.get("no"),
                     campus=(BROOKLYN if row["crn"] in brooklyn_crns
                             else WASHINGTON_SQUARE),

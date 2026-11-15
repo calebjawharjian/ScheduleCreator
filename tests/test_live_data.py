@@ -21,9 +21,11 @@ pytestmark = pytest.mark.live
 
 SPRING_2027 = "1274"
 
-# One course per numbering scheme in play: CAS numeric, and Tandon stem-based
-# with three components.
-LINKAGE_COURSES = ["MATH-UA 121", "CSCI-UA 102", "EG-UY 1004"]
+# One course per numbering scheme in play: CAS numeric, Tandon stem-based with
+# three components, Tandon lettered (letters name lectures), and Tandon
+# course-wide labs ('LAB1' names no lecture).
+LINKAGE_COURSES = ["MATH-UA 121", "CSCI-UA 102", "EG-UY 1004",
+                   "MA-UY 1044", "CS-UY 2124"]
 
 
 @pytest.fixture(scope="module")
@@ -39,7 +41,8 @@ def test_live_courses_all_resolve(live_courses):
 def test_no_live_section_is_orphaned(live_courses):
     for course in live_courses:
         orphans = [s.section_no for s in course.sections
-                   if s.kind != SectionKind.LECTURE and not s.parent_section_id]
+                   if s.kind != SectionKind.LECTURE and not s.parent_section_id
+                   and not s.any_lecture]
         assert orphans == [], f"{course.code} has unlinked sections: {orphans}"
 
 
@@ -71,6 +74,23 @@ def test_live_stem_numbered_sections_stay_within_their_block(live_courses):
                 assert stem == parent_stem, (
                     f"{course.code} {s.section_no} (block {stem}) linked to "
                     f"block {parent_stem}")
+
+
+def test_no_live_lab_course_offers_a_lecture_without_its_lab(live_courses):
+    """The failure the user hit on CS-UY 2124: lectures bundled with no lab.
+    A lecture-only bundle is legitimate only when nothing can pair with it."""
+    from scheduler import valid_bundles
+
+    for course in live_courses:
+        for bundle in valid_bundles(course):
+            if len(bundle) == 1:
+                lecture = bundle[0]
+                assert not course.recitations_for(lecture.section_id), (
+                    f"{course.code} {lecture.section_no} bundled alone despite "
+                    f"having components")
+            kinds = {s.kind for s in bundle}
+            needed = {s.kind for s in course.recitations_for(bundle[0].section_id)}
+            assert needed <= kinds, f"{course.code} bundle missing {needed - kinds}"
 
 
 def test_live_multi_component_course_still_needs_every_component(live_courses):

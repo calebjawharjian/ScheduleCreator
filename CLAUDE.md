@@ -320,7 +320,27 @@ The block is named explicitly, so linkage is a dictionary lookup and ordering
 is irrelevant. Used only when *every* section in the course parses as a stem,
 so mixed/unknown numbering falls back rather than half-applying a scheme.
 
-**2. Sequential (CAS).** Numeric sections (`001` lecture, `002`-`005`
+**1b. Lettered (Tandon) — letter link, or course-wide.** Found by the user on
+**CS-UY 2124** and **ECE-UY 3114** (Spring 2027), and 16 multi-lecture courses
+in all. Lectures are lettered without digits (`ALEC`, or bare `A`), so the stem
+strategy skips them, and the sequential scan used to run instead: `ALEC` sorts
+before `LAB1`, so **every lab landed on the last lecture** and the others became
+lecture-only bundles — unregistrable, and ranked *well* for having fewer
+classes. Two shapes, decided per course by `_link_by_letter`:
+- **Letters name lectures** — MA-UY 1044 `A`…`G` with `ARC1`…`GRC4`, PH-UY 1223
+  `ALEC`/`AREC`, CE-UY 1002 `ALEC`/`ALAB`. Linked by letter. Corroborated where
+  NYU says anything: MA-UY 1044's `A` and `ARC1` both note Washington Square.
+- **Components name no lecture** — `LAB1`…`LAB8` on CS-UY 1113/1114/1134/2124;
+  ECE-UY 3114's labs `A`–`E` against lectures `A`–`B` (so the letters are lab
+  slots). These are **course-wide**: `Section.any_lecture`, pairing with every
+  lecture. A component with no letter, or a letter no lecture has, makes the
+  whole course course-wide — one reading per course, never a mix.
+- NYU's `clssnotes` say nothing about pairing; numbering is the only evidence.
+  The user's list went from 24 schedules (most missing a lab) to 100, none.
+- MA-UY 4424 lecture `A` has no `A` recitation at all, so it bundles alone —
+  the data, not the linker (same as EG-UY 1004's recitation-less block).
+
+**2. Sequential (CAS) — numeric numbering only.** Numeric sections (`001` lecture, `002`-`005`
 recitations) name no block, so the heuristic is:
 
 > Sections sorted by number form blocks. Each `LEC` starts a block, and every
@@ -618,8 +638,10 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   coverage measurement.
 - **Sections with no meeting times** (online/TBA) cannot conflict with anything and
   contribute nothing to day/time factors, which can inflate their schedules' scores.
-- **Course-wide recitations** (`parent_section_id = None`, pairing with any lecture)
-  are not handled.
+- **Course-wide components are inferred from numbering alone.** `LAB1`-style
+  labs and out-of-range lab letters are read as "any lecture" (see 1b). If a
+  department actually ties them to lectures in Albert without saying so in
+  the numbering, some offered combinations would be rejected at registration.
 - **Schedule counts still explode; the top-N no longer shows it.** EXPOS-UA 1
   alone has 86 sections, so `["CSCI-UA 102", "MATH-UA 121", "EXPOS-UA 1",
   "EG-UY 1004"]` produces 120,119 schedules. `distinct_schedules` fixes the
