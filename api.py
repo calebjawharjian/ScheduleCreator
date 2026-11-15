@@ -85,6 +85,9 @@ class MeetingOut(BaseModel):
 class SectionOut(BaseModel):
     section_id: str              # the CRN the student registers with
     course_code: str
+    # 'CSCI-UA 480: Computer Graphics', or just the code. The code alone cannot
+    # tell two Special Topics apart, on screen or as a colour key.
+    course_label: str
     kind: str
     section_no: str | None
     instructor: str | None
@@ -231,6 +234,8 @@ def _meeting_out(meeting) -> MeetingOut:
 def _section_out(section: Section, ratings: dict[str, float]) -> SectionOut:
     return SectionOut(
         section_id=section.section_id, course_code=section.course_code,
+        course_label=(f"{section.course_code}: {section.topic}" if section.topic
+                      else section.course_code),
         kind=section.kind.name, section_no=section.section_no,
         instructor=section.instructor,
         rating=ratings.get(section.instructor) if section.instructor else None,

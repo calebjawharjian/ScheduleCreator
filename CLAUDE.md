@@ -86,7 +86,7 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `scoring.py` | `Preferences`, per-factor scoring, `compare_to_ideal`, `rank_schedules`, `distinct_schedules`, `diverse_top` |
 | `narrator.py` | `Narrator` interface + `build_findings` + `TemplateNarrator` (deterministic) + `OpenAICompatNarrator` + `ClaudeNarrator` |
 | `api.py` | FastAPI layer: `/generate` (expensive, cached) + `/rank` (interactive) + `/factors` |
-| `web/` | React + TypeScript (Vite). Week grid, weight sliders, labelled alternatives |
+| `web/` | React + TypeScript (Vite). Course chips (required/optional, take N), credit range + target, week grid, drag-to-rank priorities, labelled alternatives |
 | `main.py` | CLI entry point. Scaffolding that predates the web UI; delete once the frontend covers it |
 | `tests/` | pytest suite. Offline by default; `tests/fixtures/` holds recorded responses |
 | `tests/test_live_data.py` | **Keep.** Live guards for linkage + both joins; `pytest -m live` |
@@ -691,10 +691,9 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
 - **Wildcards multiply outside lookups.** Every candidate is fetched (one
   details request each, for credits) and its instructors are rated, so a cold
   `CSCI-UA 4xx` request takes ~10s. Cached after the first time.
-- **The UI cannot yet mark courses optional, set counts, or a credit range.**
-  The API accepts them (`courses: [{code, required, count}]`, `credits_min`,
-  `credits_max`, plain strings still work) and the CLI has `--optional`,
-  `--credits 12-16` and `2x CODE`; the chips UI is step 4.
+- **Course chips are not remembered.** The chips, credit range and target
+  live in React state only, so a reload starts over. A per-browser
+  `localStorage` draft would fix it; nothing has needed it yet.
 - **Diversity is only as good as the factors.** `diverse_top` reserves slots
   along the six scoring factors, so an alternative that is different in a way
   no factor measures -- a specific building, a professor's teaching style, a
@@ -716,10 +715,17 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
    generate on expand, which is also where the per-schedule cache belongs.
 2. **Retire `main.py`** once the frontend covers what it does. It is
    scaffolding from before there was anywhere else to put output.
-3. **Frontend tests.** There are none. Playwright is installed in the venv and
-   can drive the real app, but its Chromium needs system libs that are not
-   installed (`playwright install-deps` needs sudo); the screenshot run used
-   locally-extracted `.deb`s in a scratch dir that does not persist.
+3. **Frontend tests.** There are none checked in. WSL's Chromium still lacks
+   system libs (`playwright install-deps` needs sudo), but **driving the
+   installed Windows Edge works**: a Windows-side venv with `pip install
+   playwright` and `chromium.launch(channel="msedge")` needs no browser
+   download. Run the API and Vite in WSL with `--host 0.0.0.0` so Windows'
+   `localhost` reaches them, and launch Vite with `setsid` or it dies with
+   the shell that started it. The step-4 UI was verified this way (chips,
+   optional toggle, credit range and target, stale cue, take-N stepper,
+   type-then-click) with no console errors; the script was not kept.
+   **Vite in WSL does not see edits made from Windows** (`/mnt/c` gets no
+   inotify events), so restart it after editing from the Windows side.
 3. Lazy + cached narration (generate on expand, remember the result) rather than
    narrating the whole ranked list. The per-schedule call shape already fits
    this; it needs a cache keyed on `schedule_shape`, not a restructure.

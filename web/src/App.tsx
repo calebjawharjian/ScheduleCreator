@@ -2,14 +2,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchMetadata, generate, rank } from "./api";
 import { AlternativeList } from "./components/AlternativeList";
 import { Controls } from "./components/Controls";
+import { CourseInput, withDraft } from "./components/CourseInput";
 import { WeekGrid } from "./components/WeekGrid";
 import { formatTerm } from "./format";
 import { defaultTiers, tiersToWeights } from "./weights";
 import type {
-  Alternative, GenerateResponse, Metadata, RankResponse,
+  Alternative, CourseEntry, GenerateResponse, Metadata, RankResponse,
 } from "./types";
 
-const EXAMPLE = "CSCI-UA 102, MATH-UA 121, EXPOS-UA 1, EG-UY 1004";
+const EXAMPLE = "CSCI-UA 102, MATH-UA 121, CSCI-UA 4xx";
+
+/** A blank box means "no bound", not zero. */
+const parseCredits = (text: string): number | null =>
+  text.trim() === "" ? null : Number(text);
+
+/** Everything that changes which schedules exist. When the inputs no longer
+ *  match the last search, the results describe a request the user has since
+ *  edited, and the page has to say so rather than look current. */
+const searchKey = (term: string, entries: CourseEntry[], min: string, max: string) =>
+  JSON.stringify([term, entries, min.trim(), max.trim()]);
 
 // An empty time window means "no restriction", not midnight-to-midnight as a
 // literal preference -- so a blank picker (the default) and a full-day one
@@ -24,9 +35,15 @@ export default function App() {
 
   // Empty until /factors names the default, so the term list lives only in the API.
   const [term, setTerm] = useState("");
-  const [courseText, setCourseText] = useState("");
+  const [entries, setEntries] = useState<CourseEntry[]>([]);
+  const [draft, setDraft] = useState("");
+  const [creditMin, setCreditMin] = useState("");
+  const [creditMax, setCreditMax] = useState("");
   const [generation, setGeneration] = useState<GenerateResponse | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [searchedKey, setSearchedKey] = useState<string | null>(null);
+  const stale = generation !== null &&
+    searchedKey !== searchKey(term, withDraft(entries, draft), creditMin, creditMax);
 
   const [preferredDays, setPreferredDays] = useState<string[]>([]);
   const [timeStart, setTimeStart] = useState("");
@@ -35,6 +52,9 @@ export default function App() {
   const weights = useMemo(() => tiersToWeights(tiers), [tiers]);
   const [required, setRequired] = useState<Record<string, string>>({});
   const [commuteMinutes, setCommuteMinutes] = useState(30);
+  // A ranking preference, so it re-ranks live like the other controls.
+  // Replaced by the API's default as soon as /factors answers.
+  const [creditTarget, setCreditTarget] = useState(16);
 
   const [results, setResults] = useState<RankResponse | null>(null);
   const [selected, setSelected] = useState(1);
@@ -45,20 +65,27 @@ export default function App() {
       .then((m) => {
         setMeta(m);
         setTerm(m.default_term);
+        setCreditTarget(m.default_credit_target);
         setTiers(defaultTiers(m.factors.map((f) => f.name)));
       })
       .catch((error: Error) => setApiError(error.message));
   }, []);
 
   const onGenerate = async () => {
-    const courses = courseText.split(",").map((c) => c.trim()).filter(Boolean);
+    // Fold in whatever is still being typed: see CourseInput's `draft` prop.
+    const courses = withDraft(entries, draft);
     if (courses.length === 0 || !term) return;
+    setEntries(courses);
+    setDraft("");
     setGenerating(true);
     setApiError(null);
     setResults(null);
     try {
-      const body = await generate(term, courses);
+      const body = await generate(term, courses, {
+        min: parseCredits(creditMin), max: parseCredits(creditMax),
+      });
       setGeneration(body);
+      setSearchedKey(searchKey(term, courses, creditMin, creditMax));
       setRequired({});
       // Only impose a travel buffer when the courses actually span campuses.
       setCommuteMinutes(body.campuses.length > 1 ? 30 : 0);
@@ -88,6 +115,7 @@ export default function App() {
       time_start: timeStart || FULL_DAY_START,
       time_end: timeEnd || FULL_DAY_END,
       weights,
+      credit_target: creditTarget,
       required,
       commute_minutes: commuteMinutes,
       limit: 10,
@@ -104,14 +132,22 @@ export default function App() {
       .finally(() => {
         if (inFlight.current === controller) setRanking(false);
       });
-  }, [generation, preferredDays, timeStart, timeEnd, weights, required,
-      commuteMinutes]);
+  }, [generation, preferredDays, timeStart, timeEnd, weights, creditTarget,
+      required, commuteMinutes]);
 
   useEffect(() => {
     if (!generation) return;
     const timer = setTimeout(runRank, 180);
     return () => clearTimeout(timer);
   }, [generation, runRank]);
+
+  // Courses every schedule contains: a required group with exactly one
+  // possible course. Alternatives are labelled by what they add beyond these,
+  // because two rows with different electives otherwise look alike.
+  const fixedCourses = useMemo(() => new Set(
+    (generation?.groups ?? [])
+      .filter((g) => g.required && g.matches.length === g.count)
+      .flatMap((g) => g.matches)), [generation]);
 
   const current: Alternative | undefined =
     results?.alternatives.find((a) => a.rank === selected)
@@ -127,15 +163,33 @@ export default function App() {
       </header>
 
       <div className="setup">
-        <label className="grow">
+        <div className="grow field">
           <span>Courses</span>
-          <input
-            value={courseText}
+          <CourseInput
+            entries={entries}
+            onChange={setEntries}
+            draft={draft}
+            onDraftChange={setDraft}
+            onSubmit={onGenerate}
+            groups={generation?.groups}
+            courses={generation?.courses}
             placeholder={EXAMPLE}
-            onChange={(e) => setCourseText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && onGenerate()}
           />
-        </label>
+        </div>
+        <div className="field credits">
+          <span>Credits</span>
+          <div className="credit-range">
+            <input type="number" min={0} max={30} inputMode="numeric"
+                   value={creditMin} placeholder="any"
+                   aria-label="minimum credits"
+                   onChange={(e) => setCreditMin(e.target.value)} />
+            <span className="quiet">to</span>
+            <input type="number" min={0} max={30} inputMode="numeric"
+                   value={creditMax} placeholder="any"
+                   aria-label="maximum credits"
+                   onChange={(e) => setCreditMax(e.target.value)} />
+          </div>
+        </div>
         <label>
           <span>Term</span>
           <select value={term} onChange={(e) => setTerm(e.target.value)}>
@@ -146,7 +200,7 @@ export default function App() {
         </label>
         <button type="button" className="primary" onClick={onGenerate}
                 disabled={generating}>
-          {generating ? "Loading sections…" : "Find schedules"}
+          {generating ? "Loading sections…" : stale ? "Update schedules" : "Find schedules"}
         </button>
       </div>
 
@@ -154,15 +208,25 @@ export default function App() {
 
       {generation && (
         <div className="summary">
-          {generation.courses.map((course) => (
-            <span key={course.code} className="chip">
-              {course.code}
-              <em>{course.sections} sections</em>
+          {stale && (
+            <span className="chip stale">
+              Courses or credits changed. Results below are for your last search.
             </span>
-          ))}
+          )}
           {generation.missing.map((code) => (
             <span key={code} className="chip missing">{code} not found</span>
           ))}
+          {generation.skipped.map((label) => (
+            <span key={label} className="chip missing"
+                  title="No registrable set of sections, so it was left out">
+              {label} can't be scheduled
+            </span>
+          ))}
+          {generation.course_sets > 1 && (
+            <span className="chip quiet">
+              {generation.course_sets.toLocaleString()} course combinations
+            </span>
+          )}
           <span className="chip quiet">
             {generation.total_schedules.toLocaleString()} conflict-free
             {results && <> · {results.distinct_weeks} distinct weeks</>}
@@ -181,11 +245,13 @@ export default function App() {
               timeStart={timeStart}
               timeEnd={timeEnd}
               tiers={tiers}
+              creditTarget={creditTarget}
               required={required}
               commuteMinutes={commuteMinutes}
               onDaysChange={setPreferredDays}
               onTimeChange={(s, e) => { setTimeStart(s); setTimeEnd(e); }}
               onTiersChange={setTiers}
+              onCreditTargetChange={setCreditTarget}
               onRequiredChange={setRequired}
               onCommuteChange={setCommuteMinutes}
             />
@@ -222,7 +288,7 @@ export default function App() {
                   <tbody>
                     {current.sections.map((section) => (
                       <tr key={section.section_id}>
-                        <td>{section.course_code}</td>
+                        <td>{section.course_label}</td>
                         <td className="mono">{section.section_id}</td>
                         <td>{section.kind.toLowerCase()}</td>
                         <td>
@@ -257,6 +323,7 @@ export default function App() {
             {results && (
               <AlternativeList
                 alternatives={results.alternatives}
+                fixedCourses={fixedCourses}
                 selected={current?.rank ?? 1}
                 onSelect={setSelected}
               />

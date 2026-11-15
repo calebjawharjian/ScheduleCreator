@@ -34,8 +34,10 @@ export function WeekGrid({ sections }: { sections: Section[] }) {
 
   // One stable hue per course, so the same course keeps its colour across
   // every alternative the user clicks through.
-  const courses = [...new Set(sections.map((s) => s.course_code))].sort();
-  const hueOf = (code: string) => (courses.indexOf(code) * 47) % 360;
+  // Keyed by label, not code: two Special Topics share a code and must not
+  // share a colour.
+  const courses = [...new Set(sections.map((s) => s.course_label))].sort();
+  const hueOf = (label: string) => (courses.indexOf(label) * 47) % 360;
 
   return (
     <div className="grid" style={{ ["--rows" as string]: span }}>
@@ -61,7 +63,7 @@ export function WeekGrid({ sections }: { sections: Section[] }) {
                 .map(({ section, meeting }) => {
                   const top = ((meeting.start - from) / span) * 100;
                   const height = ((meeting.end - meeting.start) / span) * 100;
-                  const hue = hueOf(section.course_code);
+                  const hue = hueOf(section.course_label);
                   return (
                     <div
                       key={`${section.section_id}-${meeting.day}-${meeting.start}`}
@@ -71,9 +73,14 @@ export function WeekGrid({ sections }: { sections: Section[] }) {
                         height: `${height}%`,
                         ["--hue" as string]: hue,
                       }}
-                      title={`${section.course_code} ${section.kind} · CRN ${section.section_id}`}
+                      title={`${section.course_label} ${section.kind} · CRN ${section.section_id}`}
                     >
                       <span className="block-code">{section.course_code}</span>
+                      {section.course_label !== section.course_code && (
+                        <span className="block-kind">
+                          {section.course_label.slice(section.course_code.length + 2)}
+                        </span>
+                      )}
                       <span className="block-kind">{section.kind.toLowerCase()}</span>
                       <span className="block-time">
                         {meeting.start_label}–{meeting.end_label}

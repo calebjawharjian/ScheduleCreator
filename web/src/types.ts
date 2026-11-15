@@ -14,6 +14,7 @@ export interface Meeting {
 export interface Section {
   section_id: string;   // the CRN a student registers with
   course_code: string;
+  course_label: string; // "CSCI-UA 480: Computer Graphics"; tells topics apart
   kind: string;
   section_no: string | null;
   instructor: string | null;
@@ -38,6 +39,7 @@ export interface Alternative {
   gap_from_ideal: number;
   variants: number;
   days_on_campus: number;
+  credits: number | null; // this schedule's total; null if any are unknown
   sections: Section[];
   factors: Factor[];
   explanation: string | null;
@@ -50,6 +52,13 @@ export interface Course {
   credits: number | null;    // null = unknown, never "zero credits"
   sections: number;
   instructors: string[];
+}
+
+/** What the user asked for, as sent to /generate. */
+export interface CourseEntry {
+  code: string;           // "CSCI-UA 102" or "CSCI-UA 4xx"
+  required: boolean;
+  count: number;
 }
 
 /** One requested entry: an exact code, a wildcard, or a multi-topic code. */
@@ -89,6 +98,7 @@ export interface Metadata {
   factors: FactorMeta[];
   terms: string[];
   default_term: string;
+  default_credit_target: number;
   days: string[];
 }
 
@@ -98,6 +108,7 @@ export interface RankRequest {
   time_start: string;
   time_end: string;
   weights: Record<string, number>;
+  credit_target: number;
   required: Record<string, string>;
   commute_minutes: number;
   limit: number;

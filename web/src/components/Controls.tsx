@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Course, FactorMeta } from "../types";
 import { WeightRanking } from "./WeightRanking";
 
@@ -11,11 +12,13 @@ interface Props {
   timeStart: string;
   timeEnd: string;
   tiers: string[][];
+  creditTarget: number;
   required: Record<string, string>;
   commuteMinutes: number;
   onDaysChange: (days: string[]) => void;
   onTimeChange: (start: string, end: string) => void;
   onTiersChange: (tiers: string[][]) => void;
+  onCreditTargetChange: (credits: number) => void;
   onRequiredChange: (required: Record<string, string>) => void;
   onCommuteChange: (minutes: number) => void;
 }
@@ -23,8 +26,19 @@ interface Props {
 export function Controls(props: Props) {
   const {
     factors, courses, campuses, preferredDays, timeStart, timeEnd, tiers,
-    required, commuteMinutes,
+    creditTarget, required, commuteMinutes,
   } = props;
+  const [targetText, setTargetText] = useState(String(creditTarget));
+
+  // One row per catalog code. A requirement is keyed by code in the API, and
+  // CSCI-UA 480's topics share one -- so their instructors are merged here
+  // rather than listing seven rows that would all set the same requirement.
+  const instructorsByCode = new Map<string, Set<string>>();
+  for (const course of courses) {
+    const names = instructorsByCode.get(course.code) ?? new Set<string>();
+    course.instructors.forEach((name) => names.add(name));
+    instructorsByCode.set(course.code, names);
+  }
 
   const toggleDay = (day: string) => {
     props.onDaysChange(
@@ -77,33 +91,84 @@ export function Controls(props: Props) {
       </section>
 
       <section>
+        <h3>Credit load</h3>
+        <p className="hint">
+          The total the credit-load factor aims for. Each 4-credit course away
+          from it costs half that factor's score.
+        </p>
+        <label className="target">
+          <span>Aim for</span>
+          <input type="number" min={0} max={30} value={targetText}
+                 onChange={(e) => {
+                   // The box keeps its own text so it can be emptied mid-edit;
+                   // only a real number reaches the ranking, never a blank as 0.
+                   setTargetText(e.target.value);
+                   const value = Number(e.target.value);
+                   if (e.target.value !== "" && value >= 0) {
+                     props.onCreditTargetChange(value);
+                   }
+                 }}
+                 onBlur={() => setTargetText(String(creditTarget))} />
+          <span>credits</span>
+        </label>
+      </section>
+
+      <section>
         <h3>Non-negotiable professors</h3>
         <p className="hint">
           A requirement filters before ranking. A weight never can &mdash; it only
-          makes a match score well, so it can still lose on other factors.
+          makes a match score well, so it can still lose on other factors. For an
+          optional course it applies only to schedules that include it.
         </p>
-        {courses.map((course) => (
-          <label key={course.code} className="require">
-            <span>{course.code}</span>
-            <select
-              value={required[course.code] ?? ""}
-              onChange={(e) => {
-                const next = { ...required };
-                if (e.target.value) next[course.code] = e.target.value;
-                else delete next[course.code];
-                props.onRequiredChange(next);
-              }}
-              disabled={course.instructors.length === 0}
-            >
-              <option value="">
-                {course.instructors.length ? "anyone" : "no instructors published"}
-              </option>
-              {course.instructors.map((name) => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </select>
-          </label>
-        ))}
+        {(() => {
+          // A wildcard can bring 17 candidates, which turned this into a wall
+          // of dropdowns that pushed everything below it off screen. Courses
+          // with no published names get one line instead of a dead dropdown,
+          // and a long list folds -- staying open if a requirement is set, so
+          // an active filter is never hidden.
+          const named = [...instructorsByCode].filter(([, n]) => n.size > 0);
+          const unnamed = [...instructorsByCode].filter(([, n]) => n.size === 0)
+            .map(([code]) => code);
+          const rows = named.map(([code, names]) => (
+            <label key={code} className="require">
+              <span>{code}</span>
+              <select
+                value={required[code] ?? ""}
+                onChange={(e) => {
+                  const next = { ...required };
+                  if (e.target.value) next[code] = e.target.value;
+                  else delete next[code];
+                  props.onRequiredChange(next);
+                }}
+              >
+                <option value="">anyone</option>
+                {[...names].sort().map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </label>
+          ));
+          return (
+            <>
+              {rows.length > 5 ? (
+                <details className="require-list"
+                         open={Object.keys(required).length > 0}>
+                  <summary>
+                    {rows.length} courses with published instructors
+                    {Object.keys(required).length > 0 &&
+                      ` · ${Object.keys(required).length} required`}
+                  </summary>
+                  {rows}
+                </details>
+              ) : rows}
+              {unnamed.length > 0 && (
+                <p className="hint">
+                  No instructors published yet for {unnamed.join(", ")}.
+                </p>
+              )}
+            </>
+          );
+        })()}
       </section>
 
       {campuses.length > 1 && (

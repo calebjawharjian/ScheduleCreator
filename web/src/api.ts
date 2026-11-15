@@ -1,5 +1,5 @@
 import type {
-  GenerateResponse, Metadata, RankRequest, RankResponse,
+  CourseEntry, GenerateResponse, Metadata, RankRequest, RankResponse,
 } from "./types";
 
 const BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
@@ -56,8 +56,13 @@ export async function fetchMetadata(): Promise<Metadata> {
   return response.json();
 }
 
-export function generate(term: string, courses: string[]): Promise<GenerateResponse> {
-  return post<GenerateResponse>("/generate", { term, courses });
+export function generate(
+  term: string, courses: CourseEntry[],
+  credits: { min: number | null; max: number | null },
+): Promise<GenerateResponse> {
+  return post<GenerateResponse>("/generate", {
+    term, courses, credits_min: credits.min, credits_max: credits.max,
+  });
 }
 
 /**

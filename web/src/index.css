@@ -55,8 +55,49 @@ header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
   border-radius: var(--radius); padding: 14px;
 }
 .setup .grow { flex: 1 1 380px; }
-.setup label { display: flex; flex-direction: column; gap: 6px; }
-.setup label > span { font-size: 12px; color: var(--muted); }
+.setup label, .setup .field { display: flex; flex-direction: column; gap: 6px; }
+.setup label > span, .setup .field > span { font-size: 12px; color: var(--muted); }
+
+/* The course box is chips plus a free input, styled to read as one field. */
+.course-input {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 5px 6px; min-height: 42px; cursor: text;
+}
+.course-input:focus-within { outline: 2px solid var(--accent-dim); border-color: var(--accent); }
+.course-input input {
+  flex: 1 1 160px; min-width: 120px; border: 0; background: transparent;
+  padding: 5px 4px; outline: none;
+}
+.course-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-dim); border: 1px solid var(--accent);
+  border-radius: 999px; padding: 3px 4px 3px 11px; font-size: 13px;
+}
+/* Optional reads differently at a glance, before the label is read. */
+.course-chip.optional {
+  background: transparent; border-style: dashed; border-color: var(--muted);
+}
+.course-chip-code { font-weight: 600; white-space: nowrap; }
+.course-chip em { color: var(--muted); font-style: normal; font-size: 12px; white-space: nowrap; }
+.course-chip button {
+  font: inherit; font-size: 12px; cursor: pointer; color: var(--text);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+}
+.course-chip button:disabled { opacity: 0.4; cursor: default; }
+.course-chip .toggle { padding: 2px 9px; }
+.course-chip .toggle:hover { border-color: var(--accent); }
+.course-chip .remove {
+  width: 22px; height: 22px; padding: 0; line-height: 1;
+  background: transparent; border-color: transparent; color: var(--muted);
+}
+.course-chip .remove:hover { color: var(--bad); }
+.stepper { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
+.stepper button { width: 22px; height: 22px; padding: 0; line-height: 1; }
+.stepper-value { min-width: 12px; text-align: center; font-variant-numeric: tabular-nums; }
+
+.credit-range { display: flex; align-items: center; gap: 6px; }
+.credit-range input { width: 70px; }
 
 input, select {
   background: var(--panel-2); color: var(--text);
@@ -83,6 +124,7 @@ button.primary:disabled { opacity: 0.6; cursor: progress; }
 .chip em { color: var(--muted); font-style: normal; font-size: 12px; }
 .chip.quiet { color: var(--muted); }
 .chip.missing { border-color: var(--bad); color: var(--bad); }
+.chip.stale { border-color: var(--warn); color: var(--warn); }
 
 .error, .warn {
   border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px;
@@ -160,7 +202,14 @@ aside, .results {
 .weight-chip:hover { border-color: var(--accent); }
 .weight-chip.dragging { opacity: 0.4; }
 
+.target { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.target input { width: 70px; }
+
 .require { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.require-list summary {
+  cursor: pointer; font-size: 13px; margin-bottom: 10px; color: var(--text);
+}
+.require-list[open] summary { margin-bottom: 12px; }
 .require > span { font-size: 12px; color: var(--muted); }
 
 /* --- week grid ------------------------------------------------------------ */
@@ -255,6 +304,9 @@ aside, .results {
 .alt-reason.reserved { color: var(--accent); }
 .alt-score { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .alt-meta { font-size: 11px; color: var(--muted); }
+/* What this row chose beyond the fixed courses -- the thing that makes two
+   rows with different electives distinguishable at all. */
+.alt-courses { font-size: 12px; color: var(--text); }
 
 .bars { display: flex; gap: 3px; align-items: flex-end; height: 26px; }
 .bar { flex: 1; height: 100%; background: var(--line); border-radius: 2px;

@@ -3,8 +3,17 @@ import type { Alternative } from "../types";
 
 interface Props {
   alternatives: Alternative[];
+  // Course labels every schedule contains. Anything else in a row is what
+  // that row chose -- an elective, an optional course -- and gets named.
+  fixedCourses: Set<string>;
   selected: number;
   onSelect: (rank: number) => void;
+}
+
+/** The courses this alternative includes beyond the fixed ones, in order. */
+function chosenCourses(alternative: Alternative, fixed: Set<string>): string[] {
+  const labels = alternative.sections.map((s) => s.course_label);
+  return [...new Set(labels)].filter((label) => !fixed.has(label)).sort();
 }
 
 /**
@@ -15,11 +24,12 @@ interface Props {
  * reason a three-day week appears at all when it scores below dozens of
  * five-day ones.
  */
-export function AlternativeList({ alternatives, selected, onSelect }: Props) {
+export function AlternativeList({ alternatives, fixedCourses, selected, onSelect }: Props) {
   return (
     <ol className="alternatives">
       {alternatives.map((alternative) => {
         const reserved = alternative.factor !== null;
+        const chosen = chosenCourses(alternative, fixedCourses);
         return (
           <li key={alternative.rank}>
             <button
@@ -34,7 +44,12 @@ export function AlternativeList({ alternatives, selected, onSelect }: Props) {
                 <span className="alt-score">{alternative.score.toFixed(2)}</span>
               </span>
 
+              {chosen.length > 0 && (
+                <span className="alt-courses">+ {chosen.join(", ")}</span>
+              )}
+
               <span className="alt-meta">
+                {alternative.credits !== null && <>{alternative.credits} credits · </>}
                 {alternative.days_on_campus} day
                 {alternative.days_on_campus === 1 ? "" : "s"} on campus
                 {alternative.variants > 1 && (
