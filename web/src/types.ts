@@ -52,10 +52,21 @@ export interface Course {
   instructors: string[];
 }
 
+/** One requested entry: an exact code, a wildcard, or a multi-topic code. */
+export interface CourseGroup {
+  code: string;           // as requested: "CSCI-UA 4xx"
+  required: boolean;      // required takes exactly `count`; optional 0..count
+  count: number;
+  matches: string[];      // schedulable course labels it draws from
+}
+
 export interface GenerateResponse {
   generation_id: string;
-  courses: Course[];
+  courses: Course[];      // every schedulable candidate, across all groups
+  groups: CourseGroup[];
   missing: string[];
+  skipped: string[];      // optional candidates that cannot be scheduled
+  course_sets: number;    // course combinations scheduled
   campuses: string[];
   total_schedules: number;
   ratings: Record<string, number>;

@@ -32,8 +32,8 @@ from campuses import campuses_in
 from constraints import CommuteBuffer, RequiredInstructor, best_effort
 from models import Day, Section, clock, hhmm
 from narrator import build_findings, load_env, narrator_from_env, TemplateNarrator
-from patterns import CoursePattern, matches_by_pattern
-from scheduler import generate_schedules, unbundleable
+from scheduler import generate_for_sets
+from selection import CourseRequest, CreditRange, Selection, SelectionError, resolve
 from scoring import (
     DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
     Preferences, compare_to_ideal, distinct_schedules, diverse_top, rank_schedules,
@@ -113,9 +113,21 @@ class AlternativeOut(BaseModel):
     explanation: str | None = None
 
 
+class CourseEntry(BaseModel):
+    """One requested group: an exact code, a wildcard ('CSCI-UA 4xx'), or a
+    multi-topic code. Required takes exactly `count`; optional takes 0..count."""
+    code: str
+    required: bool = True
+    count: int = Field(default=1, ge=1)
+
+
 class GenerateRequest(BaseModel):
     term: str = DEFAULT_TERM
-    courses: list[str] = Field(min_length=1)
+    # A plain string is a required entry ('2x CSCI-UA 4xx' sets a count), so
+    # clients that only send codes keep working unchanged.
+    courses: list[str | CourseEntry] = Field(min_length=1)
+    credits_min: float | None = None
+    credits_max: float | None = None
 
     @field_validator("term")
     @classmethod
@@ -136,10 +148,20 @@ class CourseOut(BaseModel):
     instructors: list[str]
 
 
+class GroupOut(BaseModel):
+    code: str                    # as requested: 'CSCI-UA 4xx'
+    required: bool
+    count: int
+    matches: list[str]           # schedulable course labels it can draw from
+
+
 class GenerateResponse(BaseModel):
     generation_id: str
-    courses: list[CourseOut]
+    courses: list[CourseOut]     # every schedulable candidate, across all groups
+    groups: list[GroupOut]
     missing: list[str]           # requested but not found, surfaced not swallowed
+    skipped: list[str]           # optional candidates that cannot be scheduled
+    course_sets: int             # course combinations scheduled
     campuses: list[str]
     total_schedules: int
     ratings: dict[str, float]
@@ -169,7 +191,8 @@ class RankResponse(BaseModel):
 @dataclass
 class Generation:
     term: str
-    courses: list
+    courses: list                # schedulable candidates across every group
+    selection: Selection         # the groups and the course sets scheduled
     schedules: list[list[Section]]
     ratings: dict[str, float]
 
@@ -211,8 +234,14 @@ def _section_out(section: Section, ratings: dict[str, float]) -> SectionOut:
                   sorted(section.meetings, key=lambda m: (m.day, m.start))])
 
 
-def _generation_key(term: str, courses: list[str]) -> str:
-    return f"{term}:" + ",".join(sorted(c.strip().upper() for c in courses))
+def _generation_key(term: str, requests_: list[CourseRequest],
+                    credits: CreditRange) -> str:
+    """Everything that changes which schedules exist. Order-insensitive, so
+    re-listing the same courses never misses the cache."""
+    parts = sorted(str(r) for r in requests_)
+    if credits.is_set:
+        parts.append(str(credits))
+    return f"{term}:" + ",".join(parts)
 
 
 def _require(generation_id: str) -> Generation:
@@ -236,24 +265,20 @@ def generate(request: GenerateRequest) -> GenerateResponse:
     from ratings import RMPRatings, InstructorHint, department_hint
 
     term = TERM_CODES[request.term]
-    key = _generation_key(request.term, request.courses)
     try:
-        patterns = [CoursePattern.parse(text) for text in request.courses]
+        requests_ = [CourseRequest.parse(e) if isinstance(e, str)
+                     else CourseRequest.of(e.code, e.required, e.count)
+                     for e in request.courses]
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    wildcards = [str(p) for p in patterns if p.is_wildcard]
-    if wildcards:
-        # Until optional course groups exist, every returned course would be
-        # treated as required -- all 18 CSCI-UA 4xx at once. Refuse instead.
-        raise HTTPException(
-            422, f"wildcards ({', '.join(wildcards)}) need optional course "
-                 f"selection, which is not available yet")
+    credits = CreditRange(request.credits_min, request.credits_max)
+    key = _generation_key(request.term, requests_, credits)
 
     if key not in store.generations:
         provider = NYUProvider(
             instructors=CombinedInstructors(MAInstructors(), CSInstructors()))
         try:
-            courses = provider.get_courses(term, request.courses)
+            courses = provider.get_courses(term, [r.text for r in requests_])
         except requests.RequestException as exc:
             # Raised, not left to crash: an unhandled exception is answered by
             # Starlette's outermost middleware, *outside* CORS, so the 500 has
@@ -263,24 +288,14 @@ def generate(request: GenerateRequest) -> GenerateResponse:
                 502, f"NYU's class search request failed: {exc}") from exc
         if not courses:
             raise HTTPException(404, "no sections found for any requested course")
-        multi = {text: found for text, found
-                 in matches_by_pattern(request.courses, courses).items()
-                 if len(found) > 1}
-        if multi:
-            # One code covering several distinct courses (CSCI-UA 480's Special
-            # Topics). Requiring every topic is wrong; picking one is the
-            # optional-group feature, so for now name them and stop.
-            text, found = next(iter(multi.items()))
-            raise HTTPException(
-                422, f"{text} is {len(found)} different courses this term: "
-                     f"{'; '.join(c.topic or c.title for c in found)}. "
-                     f"Choosing among them needs optional course selection, "
-                     f"which is not available yet")
-        stuck = unbundleable(courses)
-        if stuck:
-            raise HTTPException(
-                422, f"can't build a registrable set of sections for "
-                     f"{', '.join(stuck)}, so no schedule can include it")
+        try:
+            selection = resolve(requests_, courses, credits)
+        except SelectionError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        # Only courses some set can actually contain: candidates dropped as
+        # unschedulable are reported in `skipped`, not offered.
+        courses = [c for c in courses
+                   if any(c in g.courses for g in selection.groups)]
 
         wanted: dict[str, InstructorHint] = {}
         for course in courses:
@@ -292,11 +307,11 @@ def generate(request: GenerateRequest) -> GenerateResponse:
         ratings = RMPRatings(verbose=False).ratings_for(wanted) if wanted else {}
 
         store.generations[key] = Generation(
-            term=term, courses=courses,
-            schedules=generate_schedules(courses), ratings=ratings)
+            term=term, courses=courses, selection=selection,
+            schedules=generate_for_sets(selection.sets), ratings=ratings)
 
     generation = store.generations[key]
-    matched = matches_by_pattern(request.courses, generation.courses)
+    found = {g.request.text for g in generation.selection.groups}
 
     return GenerateResponse(
         generation_id=key,
@@ -305,7 +320,13 @@ def generate(request: GenerateRequest) -> GenerateResponse:
             sections=len(c.sections),
             instructors=sorted({s.instructor for s in c.sections if s.instructor}),
         ) for c in generation.courses],
-        missing=[text for text, found in matched.items() if not found],
+        groups=[GroupOut(code=g.request.text, required=g.request.required,
+                         count=g.request.count,
+                         matches=[c.label for c in g.courses])
+                for g in generation.selection.groups],
+        missing=[r.text for r in requests_ if r.text not in found],
+        skipped=generation.selection.skipped,
+        course_sets=len(generation.selection.sets),
         campuses=sorted(campuses_in(generation.courses)),
         total_schedules=len(generation.schedules),
         ratings=generation.ratings,

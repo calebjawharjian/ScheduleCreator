@@ -77,16 +77,53 @@ def has_conflict(sections: list[Section]) -> bool:
     return False
 
 
-def generate_schedules(courses: list[Course]) -> list[list[Section]]:
+def generate_schedules(courses: list[Course],
+                       bundle_cache: dict[int, list] | None = None) -> list[list[Section]]:
     """Every conflict-free schedule: one bundle from each course, with no
-    two meetings overlapping. Each schedule is a flat list of sections."""
-    per_course_bundles = [valid_bundles(course) for course in courses]
+    two meetings overlapping. Each schedule is a flat list of sections.
+
+    A depth-first search that abandons a branch at its first clash, instead of
+    building every combination and checking it afterwards. Same results in the
+    same order as the cartesian product it replaced -- it visits combinations
+    in exactly the order `itertools.product` would -- but a conflict between
+    the first two courses no longer costs every combination of the rest.
+    That matters now that one request can schedule many course sets.
+
+    `bundle_cache` (course id -> bundles) lets those sets share bundling work.
+    """
+    cache = bundle_cache if bundle_cache is not None else {}
+    per_course: list[list[tuple[list[Section], list]]] = []
+    for course in courses:
+        if id(course) not in cache:
+            # A bundle that clashes with itself (a lab over its own lecture)
+            # can never appear, so drop it once here rather than per branch.
+            cache[id(course)] = [b for b in valid_bundles(course)
+                                 if not has_conflict(b)]
+        per_course.append([(b, [m for s in b for m in s.meetings])
+                           for b in cache[id(course)]])
 
     schedules: list[list[Section]] = []
-    for combo in itertools.product(*per_course_bundles):
-        # combo is a tuple of bundles, one per course. Flatten to sections.
-        sections = [section for bundle in combo for section in bundle]
-        if not has_conflict(sections):
-            schedules.append(sections)
 
+    def extend(depth: int, sections: list[Section], meetings: list) -> None:
+        if depth == len(per_course):
+            schedules.append(sections)
+            return
+        for bundle, bundle_meetings in per_course[depth]:
+            if any(a.overlaps(b) for a in bundle_meetings for b in meetings):
+                continue
+            extend(depth + 1, sections + bundle, meetings + bundle_meetings)
+
+    extend(0, [], [])
     return schedules
+
+
+def generate_for_sets(course_sets: list[tuple[Course, ...]]) -> list[list[Section]]:
+    """Every conflict-free schedule across several course sets, in set order.
+
+    Each set is scheduled on its own -- a schedule contains exactly the
+    courses of one set -- and bundles are computed once per course however
+    many sets include it.
+    """
+    cache: dict[int, list] = {}
+    return [schedule for course_set in course_sets
+            for schedule in generate_schedules(list(course_set), cache)]

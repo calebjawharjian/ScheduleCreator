@@ -57,13 +57,3 @@ class CoursePattern:
 
     def __str__(self) -> str:
         return f"{self.subject} {self.number.replace('X', 'x')}"
-
-
-def matches_by_pattern(texts: list[str], courses: list) -> dict[str, list]:
-    """Each requested text -> the courses it matched, in request order.
-
-    An empty list is a pattern that matched nothing, which callers report as
-    missing. More than one is a wildcard, or one code covering several topics.
-    """
-    return {text: [c for c in courses if CoursePattern.parse(text).matches(c.code)]
-            for text in texts}

@@ -82,13 +82,28 @@ def test_a_course_with_no_sections_is_reported_not_swallowed(client):
 def test_generate_is_cached_by_term_and_courses(client, monkeypatch):
     """The 7-second path must run once. Course order must not defeat the key."""
     calls = []
-    original = api.generate_schedules
-    monkeypatch.setattr(api, "generate_schedules",
-                        lambda courses: calls.append(1) or original(courses))
+    original = api.generate_for_sets
+    monkeypatch.setattr(api, "generate_for_sets",
+                        lambda sets: calls.append(1) or original(sets))
 
     generate(client, ["MATH-UA 121", "CSCI-UA 102"])
     generate(client, ["CSCI-UA 102", "MATH-UA 121"])
     assert len(calls) == 1
+
+
+def test_optional_and_credits_are_part_of_the_cache_key(client, monkeypatch):
+    """The same codes marked optional, or under a credit range, are different
+    requests. Serving the cached all-required generation would be wrong."""
+    calls = []
+    original = api.generate_for_sets
+    monkeypatch.setattr(api, "generate_for_sets",
+                        lambda sets: calls.append(1) or original(sets))
+    body = {"term": "spring2027", "courses": ["CM-UY 1003"]}
+    client.post("/generate", json=body)
+    client.post("/generate", json={**body, "courses": [
+        "CM-UY 1003", {"code": "CM-UY 1001", "required": False}]})
+    client.post("/generate", json={**body, "credits_max": 3})
+    assert len(calls) == 3
 
 
 def test_generate_rejects_an_empty_course_list(client):
@@ -109,7 +124,11 @@ def test_a_lectureless_lab_course_generates_schedules(client):
 def test_an_unbundleable_course_is_named_not_reported_as_zero(client, monkeypatch):
     """A course with no registrable bundle empties the cartesian product. The
     student needs to know which course did it, not just that nothing fit."""
-    monkeypatch.setattr(api, "unbundleable", lambda courses: ["MATH-UA 121"])
+    def stuck(requests_, courses, credits):
+        raise api.SelectionError("can't build a registrable set of sections "
+                                 "for MATH-UA 121, so no schedule can include it")
+
+    monkeypatch.setattr(api, "resolve", stuck)
     response = client.post("/generate", json={"term": "fall2026",
                                               "courses": ["MATH-UA 121"]})
     assert response.status_code == 422
@@ -144,20 +163,59 @@ def test_a_malformed_course_is_a_422_not_a_crash(client):
     assert "CSCI 101" in response.json()["detail"]
 
 
-def test_wildcards_are_refused_until_optional_selection_exists(client):
-    """Every returned course is required today, so a wildcard would demand all
-    of its matches at once. Refusing is the honest interim answer."""
-    response = client.post("/generate", json={"term": "spring2027",
-                                              "courses": ["CSCI-UA 4xx"]})
-    assert response.status_code == 422
-    assert "CSCI-UA 4xx" in response.json()["detail"]
+def test_a_wildcard_schedules_one_of_its_courses_by_default(client):
+    """'CSCI-UA 4xx' means take one of them: each schedule holds exactly one
+    4xx course, and every match is a candidate."""
+    body = client.post("/generate", json={"term": "spring2027",
+                                          "courses": ["CSCI-UA 4xx"]}).json()
+    group = body["groups"][0]
+    assert group == {**group, "code": "CSCI-UA 4xx", "required": True, "count": 1}
+    assert len(group["matches"]) == 18
+    assert body["course_sets"] == 18 and body["total_schedules"] > 0
 
 
-def test_a_multi_topic_code_names_its_topics_instead_of_requiring_all(client):
+def test_a_multi_topic_code_is_one_of_its_topics(client):
+    """CSCI-UA 480 is seven courses; asking for it means one of them, never
+    all seven at once."""
+    body = client.post("/generate", json={"term": "spring2027",
+                                          "courses": ["CSCI-UA 480"]}).json()
+    assert "CSCI-UA 480: Quantum Computing" in body["groups"][0]["matches"]
+    assert body["course_sets"] == 7
+
+
+def test_a_count_takes_that_many_from_a_wildcard(client):
+    body = client.post("/generate", json={"term": "spring2027", "courses": [
+        {"code": "CSCI-UA 480", "count": 2}]}).json()
+    assert body["course_sets"] == 21          # 7 choose 2
+
+
+def test_the_credit_range_filters_course_sets(client):
+    """CM-UY 1003 is 3 credits and the optional CM-UY 1001 lab is 1: a
+    3-credit ceiling leaves only the lecture-alone set."""
+    courses = ["CM-UY 1003", {"code": "CM-UY 1001", "required": False}]
+    open_ = client.post("/generate", json={"term": "spring2027",
+                                           "courses": courses}).json()
+    capped = client.post("/generate", json={"term": "spring2027", "courses": courses,
+                                            "credits_max": 3}).json()
+    assert open_["course_sets"] == 2 and capped["course_sets"] == 1
+
+
+def test_an_impossible_credit_range_says_what_was_possible(client):
     response = client.post("/generate", json={"term": "spring2027",
-                                              "courses": ["CSCI-UA 480"]})
+                                              "courses": ["CM-UY 1003"],
+                                              "credits_min": 12})
     assert response.status_code == 422
-    assert "Quantum Computing" in response.json()["detail"]
+    assert "3" in response.json()["detail"]
+
+
+def test_a_credit_range_refuses_unknown_credits(client):
+    """Recorded Fall 2026 data has no credits. Unknown is not zero, so a range
+    cannot be checked -- refused rather than counted as free."""
+    response = client.post("/generate", json={"term": "fall2026",
+                                              "courses": ["MATH-UA 121"],
+                                              "credits_max": 16})
+    assert response.status_code == 422
+    assert "unknown" in response.json()["detail"]
 
 
 def test_generate_reports_topic_and_credits(client):
@@ -238,7 +296,7 @@ def test_weights_change_the_ranking_without_regenerating(client, monkeypatch):
     re-enter generation."""
     generation_id = generate(client)["generation_id"]
     calls = []
-    monkeypatch.setattr(api, "generate_schedules", lambda c: calls.append(1))
+    monkeypatch.setattr(api, "generate_for_sets", lambda c: calls.append(1))
 
     days_first = rank(client, generation_id, weights={"days_on_campus": 100})
     prof_first = rank(client, generation_id, weights={"professor": 100})

@@ -78,7 +78,8 @@ independent concerns. Swapping the data source touches nothing downstream.
 | `ma_instructors.py` | Math dept (Courant) instructor-name source |
 | `cs_instructors.py` | CS dept instructor-name source |
 | `combined_instructors.py` | Merges multiple instructor sources into one for `NYUProvider` |
-| `scheduler.py` | `valid_bundles`, `has_conflict`, `generate_schedules` |
+| `selection.py` | `CourseRequest` (required/optional, count), `CreditRange`, `resolve` → the course sets to schedule |
+| `scheduler.py` | `valid_bundles`, `has_conflict`, `generate_schedules` (pruning DFS), `generate_for_sets` |
 | `campuses.py` | NYU campus constants + the Location filter codes the provider queries |
 | `constraints.py` | `Constraint` interface + `RequiredInstructor` + `CommuteBuffer`; hard filters applied before scoring |
 | `ratings.py` | `RatingProvider` interface + `RMPRatings` (RateMyProfessor) + `NullRatings` |
@@ -149,6 +150,24 @@ independent concerns. Swapping the data source touches nothing downstream.
   option comes first and a schedule leading on two factors cannot take two
   rows. Like `distinct_schedules`, this lives at the display boundary — the
   ranking underneath is untouched.
+- **Every requested entry is a group; choose courses before sections.** An
+  exact code is a group of one; a wildcard (`CSCI-UA 4xx`) or a multi-topic
+  code (CSCI-UA 480) is a group of many — one concept, no wildcard special
+  case. **Required takes exactly `count`; optional takes 0..`count`**, and the
+  credit range decides how many optional courses fit. `selection.resolve`
+  enumerates whole-course *sets* first and filters them by credits, so a set
+  outside the range never costs a schedule generation; each surviving set is
+  then scheduled on its own (`generate_for_sets`), sharing bundles per course.
+  Rules that each fixed or prevented a real mistake: a course can never be
+  counted twice in a set (requiring CSCI-UA 473 *and* one of 4xx); identity
+  is the course object, never the code (one unschedulable 480 topic must not
+  drop its six siblings); an unschedulable *optional* candidate is skipped and
+  named, a *required* one still fails loudly; unknown credits under a range
+  are refused, never counted as zero; and `MAX_COMBINATIONS` refuses a request
+  that would explode before doing any work.
+- **Generation is a pruning DFS**, not product-then-check. Verified identical
+  output, in identical order, on real data (41,685 schedules for the EXPOS
+  list) and ~3x faster; it matters because one request now schedules many sets.
 - **Minutes since midnight** for all times. Makes overlap detection two integer
   comparisons.
 - **Normalize every scoring factor to 0..1** before weighting, so incommensurable
@@ -648,6 +667,18 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   *display* (see the design principle), but generation and scoring still walk
   every combination, so runtime and memory scale with the raw count, not the
   462 weeks that survive collapsing.
+- **Lighter course sets win the ranking (until the credit-load factor).**
+  Course sets of different sizes compete in one ranking, and fewer classes
+  score better on days on campus and idle time, so the smallest set the
+  credit range allows tends to rank first. Step 3 of the electives plan adds
+  a credit-load factor with a target to counter this.
+- **Wildcards multiply outside lookups.** Every candidate is fetched (one
+  details request each, for credits) and its instructors are rated, so a cold
+  `CSCI-UA 4xx` request takes ~10s. Cached after the first time.
+- **The UI cannot yet mark courses optional, set counts, or a credit range.**
+  The API accepts them (`courses: [{code, required, count}]`, `credits_min`,
+  `credits_max`, plain strings still work) and the CLI has `--optional`,
+  `--credits 12-16` and `2x CODE`; the chips UI is step 4.
 - **Diversity is only as good as the factors.** `diverse_top` reserves slots
   along the six scoring factors, so an alternative that is different in a way
   no factor measures -- a specific building, a professor's teaching style, a

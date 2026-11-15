@@ -4,8 +4,8 @@ import textwrap
 from models import Day, clock, hhmm
 from narrator import (build_findings, load_env, narrator_from_env,
                       FallbackNarrator, TemplateNarrator)
-from patterns import matches_by_pattern
-from scheduler import generate_schedules, unbundleable
+from scheduler import generate_for_sets
+from selection import CourseRequest, CreditRange, SelectionError, resolve
 from scoring import (
     Preferences, rank_schedules, compare_to_ideal, distinct_schedules,
     diverse_top,
@@ -58,10 +58,31 @@ def _requirement(text: str):
         raise argparse.ArgumentTypeError(str(exc))
 
 
+def _credit_range(text: str) -> CreditRange:
+    """'12-16' -> 12..16; '12-' or '-16' leave one side open."""
+    low, sep, high = text.partition("-")
+    try:
+        if not sep:
+            raise ValueError
+        return CreditRange(float(low) if low.strip() else None,
+                           float(high) if high.strip() else None)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected MIN-MAX credits like '12-16', got {text!r}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate and rank NYU schedules.")
     parser.add_argument("--course", dest="course_codes", action="append", default=None,
-                         help='repeatable, e.g. --course "CSCI-UA 101"')
+                         help='required, repeatable: --course "CSCI-UA 101", '
+                              'a wildcard "CSCI-UA 4xx", or a count "2x CSCI-UA 4xx"')
+    parser.add_argument("--optional", dest="optional_codes", action="append",
+                         default=None,
+                         help='may be left out, repeatable; "2x CSCI-UA 4xx" '
+                              'takes 0 to 2 of them')
+    parser.add_argument("--credits", type=_credit_range, default=CreditRange(),
+                         metavar="MIN-MAX",
+                         help='total credits, e.g. "12-16", "12-" or "-16"')
     parser.add_argument("--term", choices=sorted(TERM_CODES), default=DEFAULT_TERM)
     parser.add_argument("--days", nargs="+", choices=[d.name for d in Day],
                          default=["MON", "WED"])
@@ -244,30 +265,39 @@ else:
     from fixtures import build_fixture_courses
     provider = FixtureProvider(build_fixture_courses())
 
-courses = provider.get_courses(term, course_codes)
+try:
+    course_requests = ([CourseRequest.parse(c) for c in course_codes]
+                       + [CourseRequest.parse(c, required=False)
+                          for c in (args.optional_codes or [])])
+except ValueError as exc:
+    raise SystemExit(str(exc))
+courses = provider.get_courses(term, [r.text for r in course_requests])
 
 # Loud failure beats a silent empty result.
 if not courses:
     raise SystemExit("No courses came back. Check the codes and term.")
-stuck = unbundleable(courses)
-if stuck:
-    raise SystemExit(f"Can't build a registrable set of sections for "
-                     f"{', '.join(stuck)}, so no schedule can include it.")
+try:
+    selection = resolve(course_requests, courses, args.credits)
+except SelectionError as exc:
+    raise SystemExit(str(exc))
 
-for code, found in matches_by_pattern(course_codes, courses).items():
-    if not found:
-        print(f"warning: no sections found for {code}")
-    elif len(found) > 1:
-        # Every course here is treated as required, so a wildcard or a
-        # multi-topic code would demand all of its matches at once.
-        raise SystemExit(f"{code} matches {len(found)} courses; choosing among "
-                         f"them needs optional course selection (not yet built).")
+found = {g.request.text for g in selection.groups}
+for r in course_requests:
+    if r.text not in found:
+        print(f"warning: no sections found for {r.text}")
+for label in selection.skipped:
+    print(f"warning: skipping {label}: no registrable set of sections")
+courses = [c for c in courses if any(c in g.courses for g in selection.groups)]
 
 print("Loaded:")
-for course in courses:
-    credits = f"{course.credits:g} cr" if course.credits is not None else "? cr"
-    print(f"  {course.label}  {course.title}  ({credits}, "
-          f"{len(course.sections)} sections)")
+for group in selection.groups:
+    print(f"  {group.request}")
+    for course in group.courses:
+        credits = f"{course.credits:g} cr" if course.credits is not None else "? cr"
+        print(f"    {course.label}  {course.title}  ({credits}, "
+              f"{len(course.sections)} sections)")
+print(f"{len(selection.sets)} course combination(s)"
+      + (f" within {args.credits}" if args.credits.is_set else ""))
 
 # Travel time only matters, and is only asked about, when the courses actually
 # span campuses. Detected here because this is the first point the real course
@@ -305,7 +335,7 @@ if not args.no_ratings:
         professor_ratings = RMPRatings().ratings_for(wanted)
         print(f"  matched {len(professor_ratings)} of {len(wanted)}\n")
 
-schedules = generate_schedules(courses)
+schedules = generate_for_sets(selection.sets)
 print(f"{len(schedules)} conflict-free schedules")
 if not schedules:
     raise SystemExit("No valid schedules. Every combination had a time conflict.")
