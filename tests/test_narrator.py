@@ -21,11 +21,12 @@ from narrator import (
     narrator_from_env,
 )
 from scoring import (
-    DAYS, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, PROFESSOR, TIME,
+    CREDIT_LOAD, DAYS, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, PROFESSOR, TIME,
     DistinctSchedule, Preferences, score_schedule,
 )
 
-ALL_FACTORS = [DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START]
+ALL_FACTORS = [DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START,
+               CREDIT_LOAD]
 CLOCK = re.compile(r"\b\d{1,2}:\d{2}\b")
 
 
@@ -153,7 +154,8 @@ def test_sacrifices_are_ranked_by_size_and_capped():
     p = prefs()
     scored = score_schedule(schedule, p).factors
     spread = {DAYS: 0.9, TIME: 0.5, PROFESSOR: 0.8,
-              DAYS_ON_CAMPUS: 0.3, IDLE_TIME: 0.2, LATE_START: 0.95}
+              DAYS_ON_CAMPUS: 0.3, IDLE_TIME: 0.2, LATE_START: 0.95,
+              CREDIT_LOAD: 0.0}
     achievable = {n: min(1.0, scored[n] + spread[n]) for n in scored}
 
     found = findings_for(schedule, p, achievable=achievable)["sacrifices"]

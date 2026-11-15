@@ -10,6 +10,7 @@ PROFESSOR = "professor"
 DAYS_ON_CAMPUS = "days_on_campus"
 IDLE_TIME = "idle_time"
 LATE_START = "late_start"
+CREDIT_LOAD = "credit_load"
 
 FACTOR_LABELS = {
     DAYS: "preferred days",
@@ -18,7 +19,17 @@ FACTOR_LABELS = {
     DAYS_ON_CAMPUS: "days on campus",
     IDLE_TIME: "idle time between classes",
     LATE_START: "late start",
+    CREDIT_LOAD: "credit load",
 }
+
+# The standard full-time load per semester, so it is the target unless the
+# student sets one. Not neutral by default: with optional courses in play the
+# lightest set otherwise wins on days and idle time almost automatically.
+DEFAULT_CREDIT_TARGET = 16.0
+# Credits away from the target at which the score reaches 0. Eight is two
+# typical 4-credit courses, so one course off the target scores exactly 0.5.
+# Symmetric: over and under the target cost the same.
+CREDIT_SPAN = 8.0
 
 # Fixed denominator: NYU sections essentially never span more than the five
 # weekdays, so this stays meaningful without depending on any one schedule.
@@ -56,6 +67,7 @@ class Preferences:
     time_end: int                          # window closes, minutes since midnight
     professor_ratings: dict[str, float]    # instructor name -> rating on 0..5
     weights: dict[str, float]              # factor name -> relative weight
+    credit_target: float = DEFAULT_CREDIT_TARGET
 
 
 @dataclass
@@ -142,6 +154,27 @@ def _score_late_start(schedule: list[Section], prefs: Preferences) -> float:
     return max(0.0, min(1.0, (earliest - EARLY_START_FLOOR) / span))
 
 
+def schedule_credits(schedule: list[Section]) -> float | None:
+    """Total credits: each course once, never each section.
+
+    Sections carry their course's credits, and a bundle repeats them on every
+    member (EG-UY 1004 is a lecture, a lab and a recitation worth 4 credits in
+    all), so this sums per (code, topic) -- the course identity, since one
+    code can be several Special Topics. None if any course's are unknown.
+    """
+    by_course = {(s.course_code, s.topic): s.credits for s in schedule}
+    if any(credits is None for credits in by_course.values()):
+        return None
+    return sum(by_course.values())
+
+
+def _score_credit_load(schedule: list[Section], prefs: Preferences) -> float:
+    total = schedule_credits(schedule)
+    if total is None:
+        return 0.5   # unknown total: neutral, as for an unrated professor
+    return max(0.0, 1.0 - abs(total - prefs.credit_target) / CREDIT_SPAN)
+
+
 def score_schedule(schedule: list[Section], prefs: Preferences) -> ScoreBreakdown:
     factors = {
         DAYS: _score_days(schedule, prefs),
@@ -150,6 +183,7 @@ def score_schedule(schedule: list[Section], prefs: Preferences) -> ScoreBreakdow
         DAYS_ON_CAMPUS: _score_days_on_campus(schedule, prefs),
         IDLE_TIME: _score_idle_time(schedule, prefs),
         LATE_START: _score_late_start(schedule, prefs),
+        CREDIT_LOAD: _score_credit_load(schedule, prefs),
     }
     weight_total = sum(prefs.weights.get(name, 0.0) for name in factors)
     if weight_total == 0:

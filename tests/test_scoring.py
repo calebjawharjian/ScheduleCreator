@@ -4,12 +4,14 @@ from models import Day, Meeting, Section, SectionKind, hhmm
 from scoring import (
     Preferences, score_schedule, rank_schedules, compare_to_ideal,
     distinct_schedules, schedule_shape, diverse_top,
-    DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
+    DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, CREDIT_LOAD,
+    FACTOR_LABELS, DEFAULT_CREDIT_TARGET, schedule_credits,
     _score_days, _score_time, _score_professor,
-    _score_days_on_campus, _score_idle_time, _score_late_start,
+    _score_days_on_campus, _score_idle_time, _score_late_start, _score_credit_load,
 )
 
-ALL_FACTORS = [DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START]
+ALL_FACTORS = [DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START,
+               CREDIT_LOAD]
 
 
 def m(day, start, end):
@@ -35,7 +37,8 @@ def prefs(**overrides):
 # --- the 0..1 contract every factor must honor -------------------------------
 
 SCORERS = [_score_days, _score_time, _score_professor,
-           _score_days_on_campus, _score_idle_time, _score_late_start]
+           _score_days_on_campus, _score_idle_time, _score_late_start,
+           _score_credit_load]
 
 
 @pytest.mark.parametrize("scorer", SCORERS)
@@ -410,3 +413,64 @@ def test_a_single_week_yields_a_single_row():
 
 def test_no_schedules_yields_no_alternatives():
     assert diverse_top([]) == []
+
+
+# --- credit load ---------------------------------------------------------------
+
+def course_sections(code, credits, kinds=(SectionKind.LECTURE,), topic=None):
+    """One course's bundle: every section repeats the course's credits."""
+    return [Section(f"{code}-{k.name}", code, k, None, topic=topic, credits=credits)
+            for k in kinds]
+
+
+def load(*courses):
+    return [s for course in courses for s in course]
+
+
+def test_credits_count_each_course_once_not_each_section():
+    """EG-UY 1004 is a lecture, a lab and a recitation worth 4 credits in all;
+    summing per section would call it 12."""
+    eg = course_sections("EG-UY 1004", 4, (SectionKind.LECTURE, SectionKind.LAB,
+                                           SectionKind.RECITATION))
+    assert schedule_credits(load(eg, course_sections("MATH-UA 121", 4))) == 8
+
+
+def test_two_topics_of_one_code_are_two_courses():
+    graphics = course_sections("CSCI-UA 480", 4, topic="Graphics")
+    vision = course_sections("CSCI-UA 480", 4, topic="Vision")
+    assert schedule_credits(load(graphics, vision)) == 8
+
+
+def test_unknown_credits_make_the_total_unknown():
+    assert schedule_credits(load(course_sections("X 1", None),
+                                 course_sections("Y 1", 4))) is None
+
+
+def test_the_default_target_is_a_full_sixteen_credit_load():
+    assert DEFAULT_CREDIT_TARGET == 16
+    assert prefs().credit_target == 16
+
+
+@pytest.mark.parametrize("total, expected", [
+    (16, 1.0), (12, 0.5), (20, 0.5), (8, 0.0), (24, 0.0), (4, 0.0), (14, 0.75)])
+def test_credit_load_is_symmetric_one_course_off_is_half(total, expected):
+    """Linear over an 8-credit span either side of the target: one 4-credit
+    course away scores 0.5, two scores 0, over and under alike."""
+    schedule = load(*(course_sections(f"C {i}", 2) for i in range(total // 2)))
+    assert _score_credit_load(schedule, prefs()) == pytest.approx(expected)
+
+
+def test_unknown_credits_score_neutral_like_an_unrated_professor():
+    assert _score_credit_load(course_sections("X 1", None), prefs()) == 0.5
+
+
+def test_the_target_decides_which_load_ranks_first():
+    """The reason the factor exists: without it the lighter set wins on days
+    and idle time; aimed at 16, the full load ranks first."""
+    light = load(*(course_sections(f"L {i}", 4) for i in range(3)))      # 12
+    full = load(*(course_sections(f"F {i}", 4) for i in range(4)))       # 16
+    only_credits = prefs(weights={CREDIT_LOAD: 1})
+    ranked = rank_schedules([light, full], only_credits)
+    assert ranked[0][0] is full
+    lighter_wanted = prefs(weights={CREDIT_LOAD: 1}, credit_target=12)
+    assert rank_schedules([light, full], lighter_wanted)[0][0] is light

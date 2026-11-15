@@ -421,6 +421,7 @@ class NYUProvider(CourseProvider):
                             else WASHINGTON_SQUARE),
                     block_id=blocks.get(row["crn"]),
                     topic=topic,
+                    credits=course.credits,
                 ))
 
             courses[(code, title)] = course

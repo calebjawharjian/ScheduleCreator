@@ -352,3 +352,27 @@ def test_ratings_reach_the_client_attached_to_sections(client):
              if s["instructor"]]
     assert rated, "expected at least one named instructor"
     assert any(s["rating"] is not None for s in rated)
+
+
+def test_the_credit_target_re_ranks_without_regenerating(client, monkeypatch):
+    """CM-UY 1003 alone is 3 credits, with the optional 1-credit lab 4. The
+    target is a ranking preference, so moving it must not regenerate."""
+    generation_id = client.post("/generate", json={"term": "spring2027", "courses": [
+        "CM-UY 1003", {"code": "CM-UY 1001", "required": False}]}).json()["generation_id"]
+    calls = []
+    monkeypatch.setattr(api, "generate_for_sets", lambda c: calls.append(1))
+
+    def top_credits(target):
+        body = rank(client, generation_id, weights={"credit_load": 100},
+                    credit_target=target)
+        return body["alternatives"][0]["credits"]
+
+    assert top_credits(4) == 4.0
+    assert top_credits(3) == 3.0
+    assert calls == []
+
+
+def test_factors_endpoint_lists_credit_load_with_its_default_target(client):
+    body = client.get("/factors").json()
+    assert "credit_load" in {f["name"] for f in body["factors"]}
+    assert body["default_credit_target"] == 16

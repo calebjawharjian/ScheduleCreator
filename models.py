@@ -73,6 +73,10 @@ class Section:
     # is seven Special Topics. Copied from the Course so a section can be
     # displayed and collapsed without a back-reference to its course.
     topic: str | None = None
+    # The *course's* credits, copied like topic so scoring can total a
+    # schedule from its sections alone. Repeated on every section of a
+    # bundle, so totals sum once per course (`scoring.schedule_credits`).
+    credits: float | None = None
 
 
 @dataclass

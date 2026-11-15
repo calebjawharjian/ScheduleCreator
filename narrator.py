@@ -29,7 +29,7 @@ import textwrap
 
 from models import Day, Section, SectionKind
 from scoring import (DistinctSchedule, FACTOR_LABELS, IdealComparison,
-                     Preferences, compare_to_ideal)
+                     Preferences, compare_to_ideal, schedule_credits)
 
 # Every provider below speaks the OpenAI chat-completions shape, so one client
 # covers all of them. Model names drift; override with NARRATOR_MODEL.
@@ -246,6 +246,11 @@ def build_findings(
         # clock time anywhere, which is what makes the output guard sound: any
         # clock time in the prose was necessarily invented.
         "meetings_outside_time_window": outside_window,
+        # The numbers behind the credit-load score, for the same reason as
+        # days_on_campus_count: "credit load 0.5" invites a guess, "12 credits
+        # against a 16-credit target" states the fact.
+        "credits": schedule_credits(schedule),
+        "credit_target": prefs.credit_target,
         "longest_gap": _longest_gap(days),
         "campus_changes": _campus_hops(days),
         "professors": professors,

@@ -9,7 +9,8 @@ from selection import CourseRequest, CreditRange, SelectionError, resolve
 from scoring import (
     Preferences, rank_schedules, compare_to_ideal, distinct_schedules,
     diverse_top,
-    DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
+    DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, CREDIT_LOAD,
+    DEFAULT_CREDIT_TARGET, FACTOR_LABELS,
 )
 
 # Read .env before anything reads the environment. The API keys were
@@ -29,7 +30,7 @@ DEFAULT_COURSE_CODES = ["CSCI-UA 101", "CSCI-UA 102", "MATH-UA 121"]
 # subway or the shuttle. Only ever applied when a schedule actually spans both.
 DEFAULT_COMMUTE_MINUTES = 30
 DEFAULT_WEIGHTS = {PROFESSOR: 3, TIME: 2, DAYS: 1,
-                   DAYS_ON_CAMPUS: 1, IDLE_TIME: 1, LATE_START: 1}
+                   DAYS_ON_CAMPUS: 1, IDLE_TIME: 1, LATE_START: 1, CREDIT_LOAD: 1}
 
 
 def _time(text: str) -> int:
@@ -83,6 +84,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--credits", type=_credit_range, default=CreditRange(),
                          metavar="MIN-MAX",
                          help='total credits, e.g. "12-16", "12-" or "-16"')
+    parser.add_argument("--credit-target", type=float, default=DEFAULT_CREDIT_TARGET,
+                         metavar="CREDITS",
+                         help=f"ideal total for the credit-load factor "
+                              f"(default {DEFAULT_CREDIT_TARGET:g})")
     parser.add_argument("--term", choices=sorted(TERM_CODES), default=DEFAULT_TERM)
     parser.add_argument("--days", nargs="+", choices=[d.name for d in Day],
                          default=["MON", "WED"])
@@ -391,6 +396,7 @@ prefs = Preferences(
     time_end=time_end,
     professor_ratings=professor_ratings,
     weights=weights,
+    credit_target=args.credit_target,
 )
 
 TOP_N = 10

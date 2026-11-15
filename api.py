@@ -35,7 +35,8 @@ from narrator import build_findings, load_env, narrator_from_env, TemplateNarrat
 from scheduler import generate_for_sets
 from selection import CourseRequest, CreditRange, Selection, SelectionError, resolve
 from scoring import (
-    DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, FACTOR_LABELS,
+    DAYS, TIME, PROFESSOR, DAYS_ON_CAMPUS, IDLE_TIME, LATE_START, CREDIT_LOAD,
+    DEFAULT_CREDIT_TARGET, FACTOR_LABELS, schedule_credits,
     Preferences, compare_to_ideal, distinct_schedules, diverse_top, rank_schedules,
 )
 
@@ -46,7 +47,7 @@ load_env()
 TERM_CODES = {"spring2026": "1264", "spring2027": "1274"}
 DEFAULT_TERM = "spring2027"
 DEFAULT_WEIGHTS = {PROFESSOR: 3, TIME: 2, DAYS: 1,
-                   DAYS_ON_CAMPUS: 1, IDLE_TIME: 1, LATE_START: 1}
+                   DAYS_ON_CAMPUS: 1, IDLE_TIME: 1, LATE_START: 1, CREDIT_LOAD: 1}
 
 app = FastAPI(title="ScheduleCreator", version="0.1")
 
@@ -108,6 +109,7 @@ class AlternativeOut(BaseModel):
     gap_from_ideal: float
     variants: int                # other section combinations at these same times
     days_on_campus: int
+    credits: float | None        # this schedule's total; None if any are unknown
     sections: list[SectionOut]
     factors: list[FactorOut]
     explanation: str | None = None
@@ -173,6 +175,9 @@ class RankRequest(BaseModel):
     time_start: str = "12:00"
     time_end: str = "18:00"
     weights: dict[str, float] = {}
+    # A ranking preference, not a generation input: changing it re-ranks in a
+    # fraction of a second instead of re-running generation.
+    credit_target: float = Field(default=DEFAULT_CREDIT_TARGET, ge=0)
     required: dict[str, str] = {}        # course code -> instructor
     commute_minutes: int = 0
     limit: int = Field(default=10, ge=1, le=50)
@@ -378,6 +383,7 @@ def rank(request: RankRequest) -> RankResponse:
         time_end=hhmm(request.time_end),
         professor_ratings=generation.ratings,
         weights={**DEFAULT_WEIGHTS, **request.weights},
+        credit_target=request.credit_target,
     )
 
     ranked = rank_schedules(eligible, prefs)
@@ -419,6 +425,7 @@ def rank(request: RankRequest) -> RankResponse:
             gap_from_ideal=round(comparison.total_gap, 4),
             variants=option.variants,
             days_on_campus=len(days),
+            credits=schedule_credits(option.schedule),
             sections=[_section_out(s, generation.ratings)
                       for s in sorted(option.schedule,
                                       key=lambda s: (s.course_code, s.kind))],
@@ -442,4 +449,5 @@ def factors() -> dict:
                         for n, l in FACTOR_LABELS.items()],
             "terms": sorted(TERM_CODES),
             "default_term": DEFAULT_TERM,
+            "default_credit_target": DEFAULT_CREDIT_TARGET,
             "days": [d.name for d in Day]}

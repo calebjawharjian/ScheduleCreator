@@ -165,6 +165,17 @@ independent concerns. Swapping the data source touches nothing downstream.
   named, a *required* one still fails loudly; unknown credits under a range
   are refused, never counted as zero; and `MAX_COMBINATIONS` refuses a request
   that would explode before doing any work.
+- **Credit load is a ranking factor with a target, not a filter.** The
+  credit *range* filters course sets at generation; the *target* scores
+  them at rank time (`RankRequest.credit_target`), so moving it re-ranks
+  instantly instead of regenerating. Default target 16 — the standard full
+  load, chosen by the user over "neutral when unset". Score is linear and
+  symmetric over an 8-credit span: one 4-credit course off scores 0.5, two
+  scores 0. Credits are copied onto each `Section` (like `topic`) and
+  totalled once per (code, topic) by `schedule_credits` — never per section,
+  which would make EG-UY 1004 twelve credits. An unknown total scores a
+  neutral 0.5, like an unrated professor. `build_findings` hands the
+  narrator `credits` and `credit_target`, not just the 0..1 score.
 - **Generation is a pruning DFS**, not product-then-check. Verified identical
   output, in identical order, on real data (41,685 schedules for the EXPOS
   list) and ~3x faster; it matters because one request now schedules many sets.
@@ -667,11 +678,16 @@ tradeoff commentary on top ("a three-day week, but a two-hour hole Tuesday").
   *display* (see the design principle), but generation and scoring still walk
   every combination, so runtime and memory scale with the raw count, not the
   462 weeks that survive collapsing.
-- **Lighter course sets win the ranking (until the credit-load factor).**
-  Course sets of different sizes compete in one ranking, and fewer classes
-  score better on days on campus and idle time, so the smallest set the
-  credit range allows tends to rank first. Step 3 of the electives plan adds
-  a credit-load factor with a target to counter this.
+- **The credit-load factor rarely changes a real top 10 — measured.** It was
+  built expecting lighter course sets to win (fewer days on campus). On the
+  real Spring 2027 list (3 required + optional ECE-UY 4144 + optional
+  CSCI-UA 4xx, 12–16 credits) 16-credit sets took the whole top 10 *without*
+  it, under both permissive and Mon/Wed-heavy preferences: an extra class
+  often fills a gap, which idle time rewards. The one 12-credit row was a
+  reserved "best for preferred days" slot, correctly left in place. The
+  factor is the guard for preferences where lighter would win, and the
+  target lets a student aim low on purpose; it is not a fix for an observed
+  problem.
 - **Wildcards multiply outside lookups.** Every candidate is fetched (one
   details request each, for credits) and its instructors are rated, so a cold
   `CSCI-UA 4xx` request takes ~10s. Cached after the first time.
